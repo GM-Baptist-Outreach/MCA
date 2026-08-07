@@ -117,6 +117,10 @@ One stack per client, repeatable pattern: dedicated GitHub repo, dedicated Supab
 - `supabase/migrations/` in this repo is now the authoritative source for schema changes going forward. Root `MCA-Supabase-Schema.sql` stays as a historical single-file reference for the original DDL, not for future edits.
 - Supabase's native GitHub integration should be connected (auto-deploys migrations/Edge Functions on push, no manual reupload).
 - Standalone "Midwest Christian Academy-GMBO" org can be deleted once confirmed empty.
+- **Three Edge Functions and a `subscription_plans` seed migration are deployed live to the project as of Aug 7, 2026**, mirrored in this repo under `supabase/functions/` and `supabase/migrations/20260807143000_seed_subscription_plans.sql`. All three are currently non-functional pending `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` as Edge Function secrets — blocked on the client waiting for Stripe account access from a third party. The GHL contact push inside `stripe-webhook` additionally needs `GHL_API_KEY_MCA`/`GHL_LOCATION_ID_MCA` set, but degrades gracefully (skips the push, logs, continues) if absent.
+  - `sync-subscription-plan-price` (admin-only): syncs a `subscription_plans` price edit to a new Stripe Price object, archives the old one.
+  - `create-enrollment-checkout` (public): creates a Stripe Checkout Session for enrollment, no DB writes.
+  - `stripe-webhook` (Stripe-called): the only place families/students/enrollments rows get created, plus keeps subscription status in sync.
 
 **Payment platform:** Stripe for the enrollment subscriptions specifically (confirmed by David). GHL's role is narrow and one-directional: parent-facing communication only, never the source of truth for payment or subscription state. The diagnostic-parsing pick list content never touches GHL at all — only a form-submission event in Priority 2 legitimately creates a GHL opportunity card.
 
