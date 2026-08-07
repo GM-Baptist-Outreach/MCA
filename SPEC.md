@@ -1,7 +1,7 @@
 # Midwest Christian Academy — Build Spec
 
 **Last updated:** August 7, 2026
-**Status:** Planning / documentation only. No Supabase project or Stripe keys are wired up in this repo yet.
+**Status:** Planning / documentation, with schema and RLS now live in Supabase. Stripe keys are not wired up in this repo yet.
 
 This document consolidates the client-facing planning conversation into a single spec to drive implementation in follow-up sessions. It is organized for reference during build, not in the original narrative order.
 
@@ -112,7 +112,9 @@ One stack per client, repeatable pattern: dedicated GitHub repo, dedicated Supab
 
 **MCA specifics:**
 - GitHub repo: `GM-Baptist-Outreach/MCA` (created — this repo).
-- Supabase project "Midwest Christian Academy," confirmed live under the GM Baptist Outreach org (not a standalone org), empty and ready.
+- Supabase project "Midwest Christian Academy," confirmed live under the GM Baptist Outreach org (not a standalone org). Ref `proiyioqfbjcmprsnqhf`, region ca-central-1.
+- **Schema and RLS are live as of Aug 7, 2026** — no longer empty. Three migrations applied directly against the project: `initial_schema` (the 19-table DDL, matching `MCA-Supabase-Schema.sql`), `rls_three_tier_security` (three-tier RLS matching the Security model section below: admin full access via `admin_users`, authenticated-parent scoped access, `anon` gets zero policies), and `revoke_anon_is_admin` (tightened `is_admin()` after Supabase's security advisor flagged it as a publicly-callable RPC — revoked `anon`'s execute, kept `authenticated`'s since RLS policies need it). Security advisor was re-run after all three migrations: zero unresolved findings other than that one, which was reviewed and accepted as intentional (it only reveals a caller's own admin status, nothing about anyone else).
+- `supabase/migrations/` in this repo is now the authoritative source for schema changes going forward. Root `MCA-Supabase-Schema.sql` stays as a historical single-file reference for the original DDL, not for future edits.
 - Supabase's native GitHub integration should be connected (auto-deploys migrations/Edge Functions on push, no manual reupload).
 - Standalone "Midwest Christian Academy-GMBO" org can be deleted once confirmed empty.
 
