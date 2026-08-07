@@ -150,7 +150,7 @@ One stack per client, repeatable pattern: dedicated GitHub repo, dedicated Supab
 
 Full detail lives in the companion file **`MCA-Supabase-Schema.sql`** (19 tables).
 
-> **TODO — NOT YET PROVIDED.** This file has not been shared by the client (David) as of this document's last update. Do not fabricate column-level detail — treat the summary below as a table inventory only, and add the real schema file in a follow-up session once received.
+See **`MCA-Supabase-Schema.sql`** at the repo root for the full column-level detail, constraints, and inline notes.
 
 Table inventory (from planning discussion, names only):
 
