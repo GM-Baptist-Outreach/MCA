@@ -57,13 +57,17 @@ Enrollment/tuition is the primary revenue path — almost all profit comes from 
 
 ## 4. Priority build order
 
-### Priority 1 — Enrollment + Stripe subscription
+### Priority 1 — Enrollment + Stripe subscription — functionally complete, tested end-to-end (Aug 7, 2026)
 
 - Parent record: name, optional second parent, phone, email.
 - Dynamically-added students: name, gender, birthdate, last grade completed.
-- Four pre-created Stripe **Price objects** (not dynamic `price_data`), kept in sync automatically from the `subscription_plans` table whenever David edits a price in the admin portal — he should never touch Stripe's dashboard directly.
-- Checkout bundles one line item per student against the correct existing Price ID.
+- Four pre-created Stripe **Price objects** (not dynamic `price_data`), kept in sync automatically from the `subscription_plans` table whenever David edits a price in the admin portal — he should never touch Stripe's dashboard directly. All four are live in Stripe test mode and attached to `subscription_plans.stripe_price_id`.
+- Checkout bundles one line item per distinct price (grouped by tier, quantity = headcount at that tier) against the correct existing Price ID — not one line item per student, since Stripe's subscription-mode Checkout rejects duplicate line items pointing at the same recurring price.
 - Enrolled parents are also pushed to GHL as a contact (one-way, at enrollment, for marketing/SMS/email and an eventual review-request flow). **Not real-time synced to billing — GHL is not the source of truth for payments.**
+
+**Tested end-to-end Aug 7, 2026:** a real test-mode enrollment (2 students, both Elementary, Annual plan) went through Stripe Checkout successfully, and the webhook correctly created the `families`/`students`/`enrollments` rows with `stripe_subscription_status: active`.
+
+**Still outstanding within this scope:** the GHL contact push is coded in `stripe-webhook` but not yet active — it needs `GHL_API_KEY_MCA` and `GHL_LOCATION_ID_MCA` set as Edge Function secrets, which per §8 ("Operational setup — not yet done") requires separate MCA-specific GHL credentials that don't exist yet. It degrades gracefully (skips the push, logs, continues) in the meantime.
 
 ### Priority 2 — Parent portal
 
@@ -117,7 +121,7 @@ One stack per client, repeatable pattern: dedicated GitHub repo, dedicated Supab
 - `supabase/migrations/` in this repo is now the authoritative source for schema changes going forward. Root `MCA-Supabase-Schema.sql` stays as a historical single-file reference for the original DDL, not for future edits.
 - Supabase's native GitHub integration should be connected (auto-deploys migrations/Edge Functions on push, no manual reupload).
 - Standalone "Midwest Christian Academy-GMBO" org can be deleted once confirmed empty.
-- **Three Edge Functions and a `subscription_plans` seed migration are deployed live to the project as of Aug 7, 2026**, mirrored in this repo under `supabase/functions/` and `supabase/migrations/20260807143000_seed_subscription_plans.sql`. All three are currently non-functional pending `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` as Edge Function secrets — blocked on the client waiting for Stripe account access from a third party. The GHL contact push inside `stripe-webhook` additionally needs `GHL_API_KEY_MCA`/`GHL_LOCATION_ID_MCA` set, but degrades gracefully (skips the push, logs, continues) if absent.
+- **Three Edge Functions and a `subscription_plans` seed migration are deployed live to the project as of Aug 7, 2026**, mirrored in this repo under `supabase/functions/` and `supabase/migrations/20260807143000_seed_subscription_plans.sql`. `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` are now set as Edge Function secrets, and a real test-mode enrollment has gone through end-to-end successfully (see Priority 1 above). The GHL contact push inside `stripe-webhook` additionally needs `GHL_API_KEY_MCA`/`GHL_LOCATION_ID_MCA` set, but degrades gracefully (skips the push, logs, continues) if absent — those secrets don't exist yet (see §8).
   - `sync-subscription-plan-price` (admin-only): syncs a `subscription_plans` price edit to a new Stripe Price object, archives the old one.
   - `create-enrollment-checkout` (public): creates a Stripe Checkout Session for enrollment, no DB writes.
   - `stripe-webhook` (Stripe-called): the only place families/students/enrollments rows get created, plus keeps subscription status in sync.

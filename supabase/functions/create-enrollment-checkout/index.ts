@@ -3,10 +3,13 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import Stripe from "npm:stripe@17.4.0";
 
 // Public — called from the Enroll page. Creates a Stripe Checkout Session,
-// one line item per tuition-eligible student. No database row is written
-// here: families/students/enrollments only get created by the webhook after
-// payment actually succeeds, so there's never a DB row without a real
-// Stripe object behind it.
+// one line item per DISTINCT price (grouped by tier, quantity = headcount at
+// that tier) — not one line item per student. Stripe's subscription-mode
+// Checkout rejects multiple line items pointing at the same recurring price,
+// which is exactly what happens when two students land in the same tier.
+// No database row is written here: families/students/enrollments only get
+// created by the webhook after payment actually succeeds, so there's never a
+// DB row without a real Stripe object behind it.
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -101,10 +104,15 @@ Deno.serve(async (req: Request) => {
         address: { line1: parent.address },
       });
 
-    const line_items = tuitionStudents.map((s: any) => ({
-      price: priceByTier[s.tier]!,
-      quantity: 1,
-    }));
+    // Group by price ID and sum quantity — one line item per distinct price,
+    // not one per student (Stripe rejects duplicate recurring-price line items
+    // in subscription mode).
+    const quantityByPriceId: Record<string, number> = {};
+    for (const s of tuitionStudents) {
+      const priceId = priceByTier[s.tier]!;
+      quantityByPriceId[priceId] = (quantityByPriceId[priceId] ?? 0) + 1;
+    }
+    const line_items = Object.entries(quantityByPriceId).map(([price, quantity]) => ({ price, quantity }));
 
     const siteUrl = origin || Deno.env.get("SITE_URL") || "https://midwestchristianacademy.com";
 
