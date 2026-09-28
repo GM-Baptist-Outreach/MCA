@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "@/lib/supabaseClient";
 import { useToast } from "@/hooks/use-toast";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -9,6 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { currentSchoolYear, reportLetter } from "@/lib/loggedCourses";
 import type { PortalContext } from "./PortalLayout";
 
 // Passing threshold for a PACE score.
@@ -33,6 +35,17 @@ interface ScoreReport {
 interface PaceStatusRow {
   item_id: string;
   status: "ordered" | "in_stock" | "issued";
+}
+
+interface PrescribedSlot {
+  id: string;
+  slot_index: number;
+  pace_number: number;
+  item_id: string | null;
+  status: string;
+  score: number | null;
+  completed_at: string | null;
+  issued_at: string | null;
 }
 
 type ComputedStatus =
@@ -65,6 +78,8 @@ export default function PortalPaceStatus() {
   const [items, setItems] = useState<Item[]>([]);
   const [scores, setScores] = useState<ScoreReport[]>([]);
   const [statuses, setStatuses] = useState<PaceStatusRow[]>([]);
+  const [slots, setSlots] = useState<PrescribedSlot[]>([]);
+  const [schoolYear, setSchoolYear] = useState(currentSchoolYear());
   const [loading, setLoading] = useState(false);
   const [savingItemId, setSavingItemId] = useState<string | null>(null);
 
@@ -84,11 +99,12 @@ export default function PortalPaceStatus() {
       setItems([]);
       setScores([]);
       setStatuses([]);
+      setSlots([]);
       return;
     }
     const load = async () => {
       setLoading(true);
-      const [itemsRes, scoresRes, statusRes] = await Promise.all([
+      const [itemsRes, scoresRes, statusRes, slotRes] = await Promise.all([
         supabase
           .from("items")
           .select("id, pace_number, original_name")
@@ -104,14 +120,24 @@ export default function PortalPaceStatus() {
           .from("pace_status")
           .select("item_id, status")
           .eq("student_id", selectedStudent.id),
+        supabase
+          .from("student_pace_slots")
+          .select(
+            "id, slot_index, pace_number, item_id, status, score, completed_at, issued_at",
+          )
+          .eq("student_id", selectedStudent.id)
+          .eq("subject_id", subjectId)
+          .eq("school_year", schoolYear)
+          .order("slot_index"),
       ]);
       if (itemsRes.data) setItems(itemsRes.data);
       if (scoresRes.data) setScores(scoresRes.data);
       if (statusRes.data) setStatuses(statusRes.data);
+      setSlots((slotRes.data ?? []) as PrescribedSlot[]);
       setLoading(false);
     };
     load();
-  }, [subjectId, selectedStudent?.id]);
+  }, [subjectId, selectedStudent?.id, schoolYear]);
 
   const computeStatus = (
     item: Item,
@@ -158,6 +184,24 @@ export default function PortalPaceStatus() {
         const without = prev.filter((s) => s.item_id !== item.id);
         return [...without, { item_id: item.id, status: newStatus }];
       });
+      // The database trigger copies this onto the matching prescribed slot
+      // unless that slot is already passed or failed.
+      setSlots((prev) =>
+        prev.map((slot) =>
+          slot.item_id === item.id &&
+          slot.status !== "passed" &&
+          slot.status !== "failed"
+            ? {
+                ...slot,
+                status: newStatus,
+                issued_at:
+                  newStatus === "issued"
+                    ? slot.issued_at ?? new Date().toISOString().slice(0, 10)
+                    : slot.issued_at,
+              }
+            : slot,
+        ),
+      );
     }
     setSavingItemId(null);
   };
@@ -182,22 +226,98 @@ export default function PortalPaceStatus() {
           PACE Status
         </h2>
         <p className="text-sm text-foreground/60">
-          {selectedStudent.student_name}
+          {selectedStudent.student_name}. ACE remains the official grade
+          record. Scores here are the ones parents submit. Ordered, in stock,
+          and issued come from PACE status and copy onto the prescribed boxes.
         </p>
       </div>
 
-      <Select value={subjectId} onValueChange={setSubjectId}>
-        <SelectTrigger className="bg-background w-64">
-          <SelectValue placeholder="Select a subject" />
-        </SelectTrigger>
-        <SelectContent>
-          {subjects.map((s) => (
-            <SelectItem key={s.id} value={s.id}>
-              {s.name}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <div className="flex items-end gap-3 flex-wrap">
+        <Select value={subjectId} onValueChange={setSubjectId}>
+          <SelectTrigger className="bg-background w-64">
+            <SelectValue placeholder="Select a subject" />
+          </SelectTrigger>
+          <SelectContent>
+            {subjects.map((s) => (
+              <SelectItem key={s.id} value={s.id}>
+                {s.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <div className="space-y-1">
+          <p className="text-xs text-foreground/50">School year</p>
+          <Input
+            value={schoolYear}
+            onChange={(event) => setSchoolYear(event.target.value)}
+            className="bg-background w-28 h-9"
+            aria-label="School year"
+          />
+        </div>
+      </div>
+
+      {subjectId && (
+        <div className="space-y-2">
+          <p className="text-xs uppercase tracking-wide text-foreground/50">
+            Prescribed boxes
+          </p>
+          {slots.length === 0 ? (
+            <p className="text-sm text-foreground/60">
+              No 12-box prescription for this subject in {schoolYear}. Staff
+              prescribe it on the family record. The list below is still the
+              full catalog with score reports and PACE status.
+            </p>
+          ) : (
+            <div className="grid grid-cols-6 sm:grid-cols-12 gap-1">
+              {Array.from({ length: 12 }, (_, index) => {
+                const slot = slots.find((row) => row.slot_index === index + 1);
+                const reported = slot
+                  ? scores.find((score) => score.pace_number === slot.pace_number)
+                  : undefined;
+                const reportedScore =
+                  reported?.score != null ? parseFloat(reported.score) : null;
+                const score =
+                  slot?.score ??
+                  (reportedScore != null && !Number.isNaN(reportedScore)
+                    ? reportedScore
+                    : null);
+                const letter = slot ? reportLetter(slot.status, score) : "";
+                const highlighted =
+                  slot &&
+                  ["issued", "passed", "failed"].includes(slot.status);
+                return (
+                  <div
+                    key={index}
+                    className="h-14 border border-primary/30 rounded-sm text-center text-xs overflow-hidden"
+                  >
+                    <div
+                      className={
+                        highlighted
+                          ? "bg-amber-200 font-semibold leading-5"
+                          : "bg-secondary/60 leading-5"
+                      }
+                    >
+                      {slot?.pace_number ?? "·"}
+                      {letter ? ` ${letter}` : ""}
+                    </div>
+                    <div
+                      className={
+                        letter === "P"
+                          ? "text-green-700 font-semibold leading-8"
+                          : letter === "F"
+                            ? "text-red-700 font-semibold leading-8"
+                            : "text-foreground/50 leading-8"
+                      }
+                    >
+                      {score ?? ""}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {loading ? (
         <p className="text-foreground/60">Loading...</p>

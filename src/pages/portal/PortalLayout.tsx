@@ -187,6 +187,24 @@ const PortalLayout = () => {
               >
                 PACE Status
               </NavLink>
+              <NavLink
+                to={`${PORTAL_ROUTE}/supervisor-report`}
+                className={navLinkClass}
+              >
+                Supervisor Report
+              </NavLink>
+              <NavLink
+                to={`${PORTAL_ROUTE}/student-report`}
+                className={navLinkClass}
+              >
+                Report Card
+              </NavLink>
+              <NavLink
+                to={`${PORTAL_ROUTE}/star-chart`}
+                className={navLinkClass}
+              >
+                Star Chart
+              </NavLink>
               <NavLink to={`${PORTAL_ROUTE}/forms`} className={navLinkClass}>
                 Forms
               </NavLink>

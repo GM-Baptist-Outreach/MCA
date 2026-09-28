@@ -48,7 +48,7 @@ Enrollment/tuition is the primary revenue path — almost all profit comes from 
 - One payment frequency covers the whole family (not mixed per student) — this also avoids Stripe's one-interval-per-subscription limit.
 - **Kindergarten does not use tuition at all.** It routes to the Priority 3 store as a one-time kit purchase (no grade tracking at that level).
 - No multi-child or returning-family discounts.
-- Sales tax: confirmed non-issue in Oklahoma.
+- Sales tax: Oklahoma 10% combined on **store products only** (not tuition, not the shipping line). Applied when the ship-to state is OK, and on every local pickup because pickup is at the Newcastle, OK office. Coupon codes are created by David in the Stripe Dashboard; store checkout keeps `allow_promotion_codes: true`.
 - Shipping is the default fulfillment method ("pretty much everything is shipped"), not pickup.
 - Restocking Fee and Service Fee are not real standalone charges — already included elsewhere. Mark inactive rather than priced.
 - Existing quarterly-plan families moving to monthly: no proration, no refund. Handled by simply re-running them through the same enrollment flow onto the new plan — not a special migration feature.
@@ -189,5 +189,6 @@ Table inventory (from planning discussion, names only):
 - Real program category names for sales reporting (not answered).
 - Adding or dropping a student mid-year (currently a one-time enrollment event, no defined update path).
 - Whether a parent can ever change their own plan through the portal, or that's admin-only.
-- Actual shipping fee amount for the Priority 3 store.
+- Actual shipping fee amount for the Priority 3 store. Quantity tiers are live. Shippo replaces them only after `SHIPPO_API_KEY` is set and the rate client in `create-store-order-checkout` is finished (TODO in that function).
+- Quarter autoship: daily `POST /functions/v1/generate-pick-lists` with header `x-cron-secret: $CRON_SECRET`. Elementary re-prescribe: `POST /functions/v1/represcribe-school-year` on or after 2027-07-01 (the function no-ops before that unless an admin passes `force: true`). 2025-26: Q1 is the initial 3 PACEs at enrollment. Fixed ship dates are Q2 2025-10-26, Q3 2026-01-11, and Q4 2026-03-08. A shipment pauses when the 6 most recently issued PACEs across subjects lack scores.
 - Where the diagnostic-to-pick-list automation lands in the Priority 1–3 build order.

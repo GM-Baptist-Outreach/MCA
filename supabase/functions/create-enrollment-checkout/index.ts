@@ -10,6 +10,9 @@ import Stripe from "npm:stripe@17.4.0";
 // No database row is written here: families/students/enrollments only get
 // created by the webhook after payment actually succeeds, so there's never a
 // DB row without a real Stripe object behind it.
+//
+// Tuition must never add a shipping line and must never add sales tax.
+// Oklahoma 10% tax is store products only (create-store-order-checkout).
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
