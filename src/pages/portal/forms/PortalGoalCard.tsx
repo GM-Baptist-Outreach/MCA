@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Plus, Trash2, Printer } from "lucide-react";
+import { currentSchoolYear } from "@/lib/loggedCourses";
 import type { PortalContext } from "../PortalLayout";
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"] as const;
@@ -33,6 +34,13 @@ const emptyGoals = (): Record<Day, { value: string; done: boolean }> =>
     (acc, d) => ({ ...acc, [d]: { value: "", done: false } }),
     {} as Record<Day, { value: string; done: boolean }>,
   );
+
+function subjectNameOf(
+  rel: { name: string } | { name: string }[] | null,
+): string {
+  if (Array.isArray(rel)) return rel[0]?.name ?? "Subject";
+  return rel?.name ?? "Subject";
+}
 
 function mondayOf(date: Date): string {
   const d = new Date(date);
@@ -89,7 +97,27 @@ export default function PortalGoalCard() {
         setRows(data.submitted_data.rows ?? []);
       } else {
         setExistingSubmissionId(null);
-        setRows([]);
+        const { data: prescribed } = await supabase
+          .from("student_pace_slots")
+          .select("subject_id, subjects(name)")
+          .eq("student_id", selectedStudent.id)
+          .eq("school_year", currentSchoolYear());
+        if (ignore) return;
+        const seen = new Set<string>();
+        const seeded: GoalRow[] = [];
+        for (const slot of prescribed ?? []) {
+          if (seen.has(slot.subject_id)) continue;
+          seen.add(slot.subject_id);
+          seeded.push({
+            subjectId: slot.subject_id,
+            subjectName: subjectNameOf(
+              slot.subjects as { name: string } | { name: string }[] | null,
+            ),
+            goals: emptyGoals(),
+          });
+        }
+        seeded.sort((a, b) => a.subjectName.localeCompare(b.subjectName));
+        setRows(seeded);
       }
       setLoading(false);
     };
@@ -148,11 +176,16 @@ export default function PortalGoalCard() {
     setSaving(true);
 
     const submittedData = { week_start: weekStart, rows };
+    const signedAt = new Date().toISOString();
 
     if (existingSubmissionId) {
       const { error } = await supabase
         .from("form_submissions")
-        .update({ submitted_data: submittedData })
+        .update({
+          submitted_data: submittedData,
+          signer_name: family.parent_name,
+          signed_at: signedAt,
+        })
         .eq("id", existingSubmissionId);
       if (error) {
         toast({
@@ -172,6 +205,7 @@ export default function PortalGoalCard() {
           form_type: "goal_card",
           submitted_data: submittedData,
           signer_name: family.parent_name,
+          signed_at: signedAt,
         })
         .select()
         .single();
@@ -257,8 +291,9 @@ export default function PortalGoalCard() {
             Weekly Goal Card
           </h2>
           <p className="text-sm text-foreground/60">
-            {selectedStudent.student_name}. Fill in daily goals and save —
-            this week is stored with the student's forms.
+            {selectedStudent.student_name}. Logged subjects start the week.
+            Fill in daily goals and save — this week is stored with the
+            student's forms.
           </p>
         </div>
         <div className="flex items-center gap-2">

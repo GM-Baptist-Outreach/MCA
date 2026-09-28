@@ -105,6 +105,12 @@ describe("Oklahoma store tax", () => {
       shouldApplyOklahomaStoreTax({ fulfillment: "ship", addressState: "TX" }),
     ).toBe(false);
     expect(shouldApplyOklahomaStoreTax({ fulfillment: "pickup" })).toBe(true);
+    expect(
+      shouldApplyOklahomaStoreTax({ fulfillment: "pickup", addressState: "" }),
+    ).toBe(true);
+    expect(
+      shouldApplyOklahomaStoreTax({ fulfillment: "pickup", addressState: "TX" }),
+    ).toBe(true);
   });
 
   it("taxes 10% of the product subtotal and ignores a shipping amount", () => {

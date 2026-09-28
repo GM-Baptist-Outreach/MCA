@@ -377,7 +377,8 @@ export default function Store() {
   );
   const showStoreTax = shouldApplyOklahomaStoreTax({
     fulfillment: customer.fulfillment,
-    addressState: customer.addressState,
+    addressState:
+      customer.fulfillment === "ship" ? customer.addressState : null,
   });
   const estimatedTax = showStoreTax
     ? oklahomaProductTaxCents(Math.round(cartTotal * 100)) / 100
@@ -432,7 +433,16 @@ export default function Store() {
               itemId: line.itemId,
               quantity: line.quantity,
             })),
-            customer,
+            customer:
+              customer.fulfillment === "pickup"
+                ? {
+                    ...customer,
+                    addressStreet: "",
+                    addressCity: "",
+                    addressState: "",
+                    addressZip: "",
+                  }
+                : customer,
             origin: window.location.origin,
           }),
         },
@@ -1061,10 +1071,11 @@ export default function Store() {
                     </span>
                   </div>
                   <p className="text-xs text-foreground/50">
-                    Tax applies to store products when we ship to Oklahoma or
-                    you pick up at our Newcastle office. Shipping is not taxed.
-                    Tuition is never taxed here. Coupon codes are entered on
-                    the Stripe checkout page.
+                    Store products are taxed at 10% when we ship to Oklahoma.
+                    Local pickup is always taxed at 10% because pickup is at
+                    our Oklahoma warehouse, and no pickup address is required.
+                    Shipping is not taxed. Tuition is never taxed here. Coupon
+                    codes are entered on the Stripe checkout page.
                   </p>
                   <Button
                     type="submit"

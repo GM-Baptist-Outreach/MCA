@@ -16,12 +16,14 @@ export function ReportChrome({
   studentName,
   schoolYear,
   onSchoolYear,
+  stats,
   children,
 }: {
   title: string;
   studentName: string;
   schoolYear: string;
   onSchoolYear: (value: string) => void;
+  stats?: Array<{ label: string; value: string }>;
   children: ReactNode;
 }) {
   return (
@@ -35,6 +37,18 @@ export function ReportChrome({
           <p className="text-sm text-foreground/70">
             {studentName} · {new Date().toLocaleDateString()}
           </p>
+          {stats && stats.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-6">
+              {stats.map((stat) => (
+                <div key={stat.label}>
+                  <p className="text-[10px] uppercase tracking-wide text-foreground/50">
+                    {stat.label}
+                  </p>
+                  <p className="text-xl font-serif text-primary">{stat.value}</p>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2 print:hidden">
           <Input
