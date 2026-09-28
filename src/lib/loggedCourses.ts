@@ -8,10 +8,14 @@ export const QUARTER_SHIP_COUNT = 3;
 export const SCORE_LOOKBACK = 6;
 export const PASSING_SCORE = 80;
 
+/** Q1 is the first 3 PACEs sent at enrollment, so it has no later ship date.
+ * 2025-26 fixed dates: Q2 2025-10-26, Q3 2026-01-11, Q4 2026-03-08.
+ */
 export const SCHOOL_YEAR_2025_26_SHIP_DATES = {
-  q1: "2025-10-26",
-  q2: "2026-01-11",
-  q3: "2026-03-08",
+  q1: "",
+  q2: "2025-10-26",
+  q3: "2026-01-11",
+  q4: "2026-03-08",
 } as const;
 
 /** Elementary numbering on `items.pace_number` (MCA internal, not ACE+1000).
@@ -38,8 +42,8 @@ export function nextSchoolYear(schoolYear: string): string {
   return `${start}-${String(start + 1).slice(-2)}`;
 }
 
-/** Known 2025-26 quarter dates, or the same month/day shifted for other years.
- * Q4 was not specified; it stays blank for staff to fill in.
+/** Q1 stays blank: those 3 PACEs go out at enrollment.
+ * Later quarters use the 2025-26 month/day, shifted to the school year.
  */
 export function suggestedFixedShipDates(schoolYear: string): {
   q1: string;
@@ -52,10 +56,10 @@ export function suggestedFixedShipDates(schoolYear: string): {
   const start = Number(match[1]);
   const end = start + 1;
   return {
-    q1: `${start}-10-26`,
-    q2: `${end}-01-11`,
-    q3: `${end}-03-08`,
-    q4: "",
+    q1: "",
+    q2: `${start}-10-26`,
+    q3: `${end}-01-11`,
+    q4: `${end}-03-08`,
   };
 }
 
@@ -118,7 +122,10 @@ export function nextQuarterPaces<T extends PaceSlotLike>(slots: T[]): T[] {
   return picked;
 }
 
-/** If at least 6 PACEs have been issued and any of the latest 6 have no score, pause. */
+/** Six most recently issued slots across every subject.
+ * Returns the ones among those six that have no score.
+ * Fewer than six issued slots does not pause a shipment.
+ */
 export function priorIssuedMissingScores<T extends PaceSlotLike>(slots: T[]): T[] {
   const issued = slots
     .filter((slot) => ISSUED.has(slot.status) || slot.issued_at != null)

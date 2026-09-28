@@ -10,6 +10,7 @@ import {
   priorIssuedMissingScores,
   reportLetter,
   selectPacesForLevel,
+  suggestedFixedShipDates,
   type PaceSlotLike,
 } from "@/lib/loggedCourses";
 import {
@@ -151,7 +152,16 @@ describe("quarter pick lists", () => {
     expect(priorIssuedMissingScores(slots)).toEqual([]);
   });
 
-  it("pauses when any of the latest 6 issued PACEs has no score", () => {
+  it("uses Q2–Q4 for 2025-26 and leaves Q1 blank", () => {
+    expect(suggestedFixedShipDates("2025-26")).toEqual({
+      q1: "",
+      q2: "2025-10-26",
+      q3: "2026-01-11",
+      q4: "2026-03-08",
+    });
+  });
+
+  it("pauses when any of the 6 most recently issued PACEs across subjects has no score", () => {
     const issued = Array.from({ length: 6 }, (_, i) =>
       slot({
         id: `i${i}`,
@@ -163,6 +173,43 @@ describe("quarter pick lists", () => {
       }),
     );
     expect(priorIssuedMissingScores(issued).map((s) => s.id)).toEqual(["i5"]);
+  });
+
+  it("ignores an unscored PACE older than the latest 6, even in another subject", () => {
+    const issued = [
+      slot({
+        id: "old",
+        subject_id: "math",
+        subject_name: "Math",
+        slot_index: 1,
+        status: "issued",
+        score: null,
+        issued_at: "2026-01-01",
+      }),
+      ...Array.from({ length: 5 }, (_, i) =>
+        slot({
+          id: `scored-${i}`,
+          subject_id: i % 2 === 0 ? "math" : "sci",
+          subject_name: i % 2 === 0 ? "Math" : "Science",
+          slot_index: i + 2,
+          status: "passed",
+          score: 90,
+          issued_at: `2026-03-0${i + 1}`,
+        }),
+      ),
+      slot({
+        id: "newest",
+        subject_id: "sci",
+        subject_name: "Science",
+        slot_index: 8,
+        status: "issued",
+        score: null,
+        issued_at: "2026-06-01",
+      }),
+    ];
+    expect(priorIssuedMissingScores(issued).map((slot) => slot.id)).toEqual([
+      "newest",
+    ]);
   });
 
   it("treats a ship date one week out as due", () => {

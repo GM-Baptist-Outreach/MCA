@@ -1,3 +1,6 @@
+/** Supervisor report, student report, and star chart.
+ * Prescribed boxes come from student_pace_slots. Scores fall back to score_reports.
+ */
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import {

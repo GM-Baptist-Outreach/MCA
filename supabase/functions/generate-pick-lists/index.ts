@@ -3,9 +3,10 @@ import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 
 // Cron-ready and admin-callable.
 // One week before a student's next_ship_date, build a pick list of the next
-// 3 unissued PACEs in each logged subject. If the latest 6 issued PACEs
-// include any without a score, pause the shipment, flag the schedule, and
-// email the parent when RESEND_API_KEY is set (otherwise log only).
+// 3 unissued PACEs in each logged subject. If the 6 most recently issued
+// slots across subjects lack scores, set shipment_paused, pick list status
+// paused, and the reminder flag. Email the parent when RESEND_API_KEY is set
+// (otherwise log only).
 //
 // Auth: admin JWT, or header x-cron-secret matching CRON_SECRET.
 // verify_jwt is disabled so the cron secret can call this without a user JWT.
@@ -77,6 +78,7 @@ function nextQuarter(slots: SlotRow[]): SlotRow[] {
   return picked;
 }
 
+/** Six most recently issued slots across subjects that have no score. */
 function missingScores(slots: SlotRow[]): SlotRow[] {
   const issued = slots
     .filter((slot) => ISSUED.has(slot.status) || slot.issued_at != null)
@@ -293,7 +295,7 @@ async function buildForSchedule(
 
   if (missing.length > 0) {
     const note =
-      `Paused: ${missing.length} of the last ${SCORE_LOOKBACK} issued PACEs have no score.`;
+      `Paused: ${missing.length} of the ${SCORE_LOOKBACK} most recently issued PACEs across subjects have no score.`;
     let emailed = false;
     if (options.reminderEmailSentAt) {
       console.log("[generate-pick-lists] reminder already sent; still paused", {

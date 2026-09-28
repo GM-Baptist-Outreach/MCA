@@ -60,8 +60,8 @@ const EMPTY_SCHEDULE = (year: string): Schedule => {
     q2_ship_date: dates.q2,
     q3_ship_date: dates.q3,
     q4_ship_date: dates.q4,
-    anchor_ship_date: dates.q1,
-    next_ship_date: dates.q1,
+    anchor_ship_date: dates.q2,
+    next_ship_date: dates.q2,
     shipment_paused: false,
     pause_reason: null,
   };
@@ -558,7 +558,7 @@ export default function LoggedCoursesPanel({
         <div className="grid grid-cols-2 gap-2">
           {(
             [
-              ["q1_ship_date", "Q1"],
+              ["q1_ship_date", "Q1 at enroll"],
               ["q2_ship_date", "Q2"],
               ["q3_ship_date", "Q3"],
               ["q4_ship_date", "Q4"],
@@ -578,10 +578,12 @@ export default function LoggedCoursesPanel({
           ))}
         </div>
         <p className="text-xs text-foreground/50 sm:col-span-2">
-          2025-26 fixed dates David named: Oct 26, Jan 11, Mar 8. Q4 is left
-          blank. One week before the next ship date, pick-list generation takes
-          the next 3 unissued PACEs in each logged subject. If the last 6
-          issued PACEs are missing scores, the shipment pauses.
+          2025-26: Q1 is the first 3 PACEs at enrollment, so that date stays
+          blank. Q2 is 2025-10-26, Q3 is 2026-01-11, and Q4 is 2026-03-08.
+          One week before the next ship date, pick-list generation takes the
+          next 3 unissued PACEs in each logged subject. If the 6 most recently
+          issued PACEs across subjects lack scores, the shipment pauses and
+          the pick list is marked paused.
         </p>
         <div className="flex flex-wrap gap-2 sm:col-span-2">
           <Button size="sm" variant="outline" onClick={saveSchedule} disabled={busy}>

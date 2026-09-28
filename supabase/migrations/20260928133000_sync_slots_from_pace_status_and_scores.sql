@@ -121,4 +121,4 @@ where slot.student_id = pace.student_id
   and pace.status in ('ordered', 'in_stock', 'issued');
 
 comment on table public.student_ship_schedules is
-  'Ship schedule for logged courses (fixed quarter dates or every 8 weeks). This is the ship_schedules table; no parallel copy.';
+  'Ship schedule for logged courses (fixed quarter dates or every 8 weeks). This is the ship schedule; no parallel ship_schedules table. 2025-26: Q1 is the initial 3 PACEs at enrollment. Q2 2025-10-26, Q3 2026-01-11, Q4 2026-03-08.';

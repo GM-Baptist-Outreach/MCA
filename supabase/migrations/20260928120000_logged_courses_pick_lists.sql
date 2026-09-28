@@ -1,7 +1,11 @@
--- Logged courses, quarter ship schedules, and pick lists.
--- Idempotent: these tables already exist on project proiyioqfbjcmprsnqhf.
+-- Mirror of the logged-course tables already applied on proiyioqfbjcmprsnqhf.
+-- CREATE TABLE IF NOT EXISTS and policies only when the name is missing.
+-- Do not drop or replace student_pace_slots, student_ship_schedules,
+-- pick_lists, or pick_list_items.
 -- ACE remains the official grade source. These rows are MCA's ops/transfer layer.
 -- Tuition checkout never writes here and never adds shipping or sales tax.
+-- 2025-26 ship dates are not stored as defaults: Q1 is the initial 3 PACEs
+-- at enrollment. Q2 is 2025-10-26, Q3 is 2026-01-11, Q4 is 2026-03-08.
 
 create table if not exists public.required_pace_plans (
   id uuid primary key default gen_random_uuid(),
@@ -26,7 +30,7 @@ create table if not exists public.student_pace_slots (
       'prescribed', 'ordered', 'in_stock', 'issued', 'passed', 'failed', 'paused'
     ])
   ),
-  score numeric,
+  score numeric(5,2),
   issued_at date,
   completed_at date,
   score_report_id uuid references public.score_reports(id),
@@ -220,6 +224,6 @@ end $$;
 comment on table public.student_pace_slots is
   'Per student+subject school-year grid of up to 12 PACEs. Ops/transfer layer only; ACE gradebook is authoritative.';
 comment on table public.student_ship_schedules is
-  'Quarter autoship schedule. 2025-26 fixed dates are 2025-10-26, 2026-01-11, 2026-03-08. Q4 is staff-entered.';
+  'Quarter autoship schedule. 2025-26: Q1 is the initial 3 PACEs at enrollment. Q2 2025-10-26, Q3 2026-01-11, Q4 2026-03-08.';
 comment on table public.pick_lists is
-  'Generated one week before next_ship_date: next 3 unissued PACEs per logged subject. Paused when the prior 6 issued PACEs lack scores.';
+  'Generated one week before next_ship_date: next 3 unissued PACEs per logged subject. Status paused and shipment_paused when the 6 most recently issued slots across subjects lack scores.';
