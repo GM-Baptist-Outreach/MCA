@@ -1,6 +1,17 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import Stripe from "npm:stripe@17.4.0";
+import {
+  readPaymentMode,
+  resolveShippoApiKey,
+  resolveStripeSecretKey,
+} from "../_shared/paymentMode.ts";
+import { readEdgePaymentEnv } from "../_shared/readEdgeEnv.ts";
+import {
+  quoteStoreShippoRate,
+  shippingTierFeeCents,
+  shouldQuoteShippo,
+} from "../_shared/storeShipping.ts";
 
 // Public store checkout. Prices from items table server-side.
 // Oklahoma 10% tax on STORE PRODUCTS only (not tuition, not shipping).
@@ -8,8 +19,9 @@ import Stripe from "npm:stripe@17.4.0";
 // does not require an address or an Oklahoma state value.
 // Ship-to taxes when address_state is OK/Oklahoma.
 // allow_promotion_codes for Stripe Dashboard warehouse coupons.
-// Shipping still quantity-tiered; Shippo later when SHIPPO_API_KEY exists.
-// Mirrors the deployed create-store-order-checkout function.
+// Shippo rates are used only when fulfillment is ship and the active mode's
+// Shippo key is set. Any Shippo miss falls back to shipping_rate_tiers.
+// Pickup never calls Shippo. Enrollment never calls this function.
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -32,14 +44,6 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const stripeSecretKey = Deno.env.get("STRIPE_SECRET_KEY");
-    if (!stripeSecretKey) {
-      return new Response(
-        JSON.stringify({ error: "The store isn't live yet — please contact us directly at (844) 663-4477." }),
-        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
-    }
-
     const body = await req.json();
     const { items, customer, origin } = body ?? {};
 
@@ -71,6 +75,16 @@ Deno.serve(async (req: Request) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const admin = createClient(supabaseUrl, serviceRoleKey);
+    const paymentEnv = readEdgePaymentEnv();
+    const mode = await readPaymentMode(admin);
+    const stripeSecretKey = resolveStripeSecretKey(mode, paymentEnv);
+    if (!stripeSecretKey) {
+      console.error(`[store-checkout] No Stripe secret for payment mode ${mode}`);
+      return new Response(
+        JSON.stringify({ error: "The store isn't live yet — please contact us directly at (844) 663-4477." }),
+        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
 
     const itemIds = items.map((i: any) => i.itemId).filter(Boolean);
     if (itemIds.length === 0) {
@@ -121,20 +135,58 @@ Deno.serve(async (req: Request) => {
     }
 
     let shippingFeeCents = 0;
-    if (customer.fulfillment === "ship") {
-      const { data: tiers } = await admin
-        .from("shipping_rate_tiers")
-        .select("min_quantity, max_quantity, price")
-        .eq("active", true)
-        .order("min_quantity", { ascending: true });
+    let shippoRateId = "";
+    let shippingQuote = customer.fulfillment === "ship" ? "tier" : "pickup";
 
-      const matchingTier = (tiers ?? []).find(
-        (t) => totalQuantity >= t.min_quantity && (t.max_quantity == null || totalQuantity <= t.max_quantity),
-      );
-      const tierToUse = matchingTier ?? (tiers ?? [])[(tiers ?? []).length - 1];
+    if (shouldQuoteShippo("store", customer.fulfillment)) {
+      const shippoKey = resolveShippoApiKey(mode, paymentEnv);
+      if (shippoKey) {
+        try {
+          const quote = await quoteStoreShippoRate({
+            apiKey: shippoKey,
+            totalQuantity,
+            to: {
+              name: `${customer.firstName} ${customer.lastName}`.trim(),
+              street1: customer.addressStreet,
+              city: customer.addressCity,
+              state: customer.addressState,
+              zip: customer.addressZip,
+              country: "US",
+              phone: customer.phone,
+              email: customer.email,
+            },
+          });
+          if (quote && quote.amountCents > 0) {
+            shippingFeeCents = quote.amountCents;
+            shippoRateId = quote.rateObjectId;
+            shippingQuote = "shippo";
+            console.log(
+              `[store-checkout] Shippo ${quote.provider} ${quote.service} ${quote.amountCents} cents (${mode}, ground=${quote.ground})`,
+            );
+          } else {
+            console.error("[store-checkout] Shippo returned no usable rate; using shipping_rate_tiers");
+          }
+        } catch (err) {
+          console.error("[store-checkout] Shippo rating failed; using shipping_rate_tiers", err);
+        }
+      } else {
+        console.log(`[store-checkout] No Shippo key for payment mode ${mode}; using shipping_rate_tiers`);
+      }
 
-      if (tierToUse) {
-        shippingFeeCents = Math.round(Number(tierToUse.price) * 100);
+      if (shippingQuote !== "shippo") {
+        const { data: tiers, error: tiersError } = await admin
+          .from("shipping_rate_tiers")
+          .select("min_quantity, max_quantity, price")
+          .eq("active", true)
+          .order("min_quantity", { ascending: true });
+        if (tiersError) {
+          console.error("[store-checkout] shipping_rate_tiers read failed", tiersError);
+        }
+        shippingFeeCents = shippingTierFeeCents(tiers ?? [], totalQuantity);
+        shippingQuote = shippingFeeCents > 0 ? "tier" : "none";
+      }
+
+      if (shippingFeeCents > 0) {
         line_items.push({
           price_data: {
             currency: "usd",
@@ -143,15 +195,6 @@ Deno.serve(async (req: Request) => {
           },
           quantity: 1,
         });
-      }
-
-      // TODO(Shippo): when SHIPPO_API_KEY is set, replace the tier above with a
-      // live rate from the Newcastle warehouse. Until then, quantity tiers stay
-      // in place even if the key exists, so checkout is never blocked.
-      if (Deno.env.get("SHIPPO_API_KEY")) {
-        console.log(
-          "[store-checkout] SHIPPO_API_KEY is set but live Shippo rating is not implemented yet. Using shipping_rate_tiers.",
-        );
       }
     }
 
@@ -201,6 +244,7 @@ Deno.serve(async (req: Request) => {
 
     const metadata: Record<string, string> = {
       order_type: "store",
+      payment_mode: mode,
       customer_first_name: customer.firstName,
       customer_last_name: customer.lastName,
       customer_email: customer.email,
@@ -212,6 +256,8 @@ Deno.serve(async (req: Request) => {
       address_zip: customer.addressZip || "",
       ok_sales_tax_cents: String(taxCents),
       product_subtotal_cents: String(productSubtotalCents),
+      shipping_quote: shippingQuote,
+      shippo_rate_id: shippoRateId,
     };
 
     const session = await stripe.checkout.sessions.create({

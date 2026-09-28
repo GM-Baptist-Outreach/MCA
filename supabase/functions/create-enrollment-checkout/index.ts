@@ -1,26 +1,25 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import Stripe from "npm:stripe@17.4.0";
+import { readPaymentMode, resolveStripeSecretKey } from "../_shared/paymentMode.ts";
+import { readEdgePaymentEnv } from "../_shared/readEdgeEnv.ts";
 
 // Public — called from the Enroll page. Creates a Stripe Checkout Session,
 // one line item per DISTINCT price (grouped by tier, quantity = headcount at
-// that tier) — not one line item per student. Stripe's subscription-mode
-// Checkout rejects multiple line items pointing at the same recurring price,
-// which is exactly what happens when two students land in the same tier.
-// No database row is written here: families/students/enrollments only get
-// created by the webhook after payment actually succeeds, so there's never a
-// DB row without a real Stripe object behind it.
+// that tier) — not one line item per student. No database row is written
+// here: families/students/enrollments only get created by the webhook after
+// payment actually succeeds, so there's never a DB row without a real
+// Stripe object behind it.
 //
-// Tuition must never add a shipping line and must never add sales tax.
-// Oklahoma 10% tax is store products only (create-store-order-checkout).
+// Tuition never adds a shipping line, never adds sales tax, and never
+// requests a carrier rate. Oklahoma tax and Shippo live only in
+// create-store-order-checkout, and only for store shipments.
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// Last grade completed -> tuition tier. "none"/empty = entering Kindergarten,
-// which doesn't use tuition at all (routes to the store instead).
 function tierFor(lastGradeCompleted: string): "elementary" | "high_school" | null {
   if (!lastGradeCompleted || lastGradeCompleted === "none") return null;
   return ["8", "9", "10", "11"].includes(lastGradeCompleted) ? "high_school" : "elementary";
@@ -32,18 +31,13 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const stripeSecretKey = Deno.env.get("STRIPE_SECRET_KEY");
-    if (!stripeSecretKey) {
-      return new Response(
-        JSON.stringify({ error: "Enrollment checkout isn't live yet — please contact us directly at (844) 663-4477." }),
-        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
-    }
-
     const body = await req.json();
     const { parent, paymentPlan, students, origin } = body ?? {};
 
-    if (!parent?.email || !parent?.firstName || !parent?.lastName || !parent?.phone || !parent?.address) {
+    if (
+      !parent?.email || !parent?.firstName || !parent?.lastName || !parent?.phone ||
+      !parent?.addressStreet || !parent?.addressCity || !parent?.addressState || !parent?.addressZip
+    ) {
       return new Response(JSON.stringify({ error: "Missing required parent information" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -76,6 +70,15 @@ Deno.serve(async (req: Request) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const admin = createClient(supabaseUrl, serviceRoleKey);
+    const mode = await readPaymentMode(admin);
+    const stripeSecretKey = resolveStripeSecretKey(mode, readEdgePaymentEnv());
+    if (!stripeSecretKey) {
+      console.error(`[enrollment-checkout] No Stripe secret for payment mode ${mode}`);
+      return new Response(
+        JSON.stringify({ error: "Enrollment checkout isn't live yet — please contact us directly at (844) 663-4477." }),
+        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
 
     const { data: plans, error: plansError } = await admin
       .from("subscription_plans")
@@ -98,13 +101,21 @@ Deno.serve(async (req: Request) => {
 
     const stripe = new Stripe(stripeSecretKey, { apiVersion: "2024-12-18.acacia" });
 
+    const addressFull = `${parent.addressStreet}, ${parent.addressCity}, ${parent.addressState} ${parent.addressZip}`;
+
     const existingCustomers = await stripe.customers.list({ email: parent.email, limit: 1 });
     const customer = existingCustomers.data[0]
       ?? await stripe.customers.create({
         email: parent.email,
         name: `${parent.firstName} ${parent.lastName}`,
         phone: parent.phone,
-        address: { line1: parent.address },
+        address: {
+          line1: parent.addressStreet,
+          city: parent.addressCity,
+          state: parent.addressState,
+          postal_code: parent.addressZip,
+          country: "US",
+        },
       });
 
     // Group by price ID and sum quantity — one line item per distinct price,
@@ -117,18 +128,23 @@ Deno.serve(async (req: Request) => {
     }
     const line_items = Object.entries(quantityByPriceId).map(([price, quantity]) => ({ price, quantity }));
 
-    const siteUrl = origin || Deno.env.get("SITE_URL") || "https://midwestchristianacademy.com";
+    const siteUrl = origin || Deno.env.get("SITE_URL") || "https://mcahomeschool.com";
 
     // Stripe metadata values are capped at 500 chars each, so full JSON blobs
     // risk truncation/errors for larger families. Encode compactly instead:
     // one key per student, pipe-delimited, well under the limit either way.
     const metadata: Record<string, string> = {
+      payment_mode: mode,
       parent_first_name: parent.firstName,
       parent_last_name: parent.lastName,
       parent_second_name: parent.secondParentName || "",
       parent_email: parent.email,
       parent_phone: parent.phone,
-      parent_address: parent.address,
+      parent_address_street: parent.addressStreet,
+      parent_address_city: parent.addressCity,
+      parent_address_state: parent.addressState,
+      parent_address_zip: parent.addressZip,
+      parent_address_full: addressFull,
       payment_plan: paymentPlan,
       student_count: String(students.length),
     };

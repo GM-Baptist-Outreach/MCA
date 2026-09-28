@@ -1,0 +1,31 @@
+project_id = "proiyioqfbjcmprsnqhf"
+
+[functions.stripe-webhook]
+verify_jwt = false
+
+[functions.create-enrollment-checkout]
+verify_jwt = false
+
+[functions.create-store-order-checkout]
+verify_jwt = false
+
+[functions.sync-subscription-plan-price]
+verify_jwt = true
+
+[functions.generate-pick-lists]
+verify_jwt = false
+
+[functions.represcribe-school-year]
+verify_jwt = false
+
+[functions.cancel-enrollment]
+verify_jwt = true
+
+[functions.portal-cancel-enrollment]
+verify_jwt = true
+
+[functions.send-payment-link]
+verify_jwt = true
+
+[functions.cancel-store-order]
+verify_jwt = true
