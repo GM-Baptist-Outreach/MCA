@@ -257,7 +257,8 @@ export default function PortalGoalCard() {
             Weekly Goal Card
           </h2>
           <p className="text-sm text-foreground/60">
-            {selectedStudent.student_name}
+            {selectedStudent.student_name}. Fill in daily goals and save —
+            this week is stored with the student's forms.
           </p>
         </div>
         <div className="flex items-center gap-2">

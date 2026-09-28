@@ -23,6 +23,7 @@ import AdminCompEnroll from "./pages/admin/AdminCompEnroll";
 import AdminFamilyDetail from "./pages/admin/AdminFamilyDetail";
 import AdminTranscript from "./pages/admin/AdminTranscript";
 import AdminAcademicProjection from "./pages/admin/AdminAcademicProjection";
+import AdminPickLists from "./pages/admin/AdminPickLists";
 import Store from "./pages/Store";
 import PortalLogin from "./pages/portal/PortalLogin";
 import PortalLayout from "./pages/portal/PortalLayout";
@@ -37,6 +38,9 @@ import PortalGoalCard from "./pages/portal/forms/PortalGoalCard";
 import PortalPeLog from "./pages/portal/forms/PortalPeLog";
 import PortalMusicVerification from "./pages/portal/forms/PortalMusicVerification";
 import PortalCourseVerification from "./pages/portal/forms/PortalCourseVerification";
+import PortalSupervisorReport from "./pages/portal/PortalSupervisorReport";
+import PortalStudentReport from "./pages/portal/PortalStudentReport";
+import PortalStarChart from "./pages/portal/PortalStarChart";
 
 const queryClient = new QueryClient();
 
@@ -68,6 +72,7 @@ const App = () => (
             <Route path="families" element={<AdminFamilies />} />
             <Route path="enroll-comp" element={<AdminCompEnroll />} />
             <Route path="families/:familyId" element={<AdminFamilyDetail />} />
+            <Route path="pick-lists" element={<AdminPickLists />} />
             <Route
               path="families/:familyId/students/:studentId/transcript"
               element={<AdminTranscript />}
@@ -82,6 +87,9 @@ const App = () => (
             <Route index element={<PortalHome />} />
             <Route path="progress" element={<PortalProgress />} />
             <Route path="pace-status" element={<PortalPaceStatus />} />
+            <Route path="supervisor-report" element={<PortalSupervisorReport />} />
+            <Route path="student-report" element={<PortalStudentReport />} />
+            <Route path="star-chart" element={<PortalStarChart />} />
             <Route path="forms" element={<PortalForms />} />
             <Route
               path="forms/enrollment-agreement"

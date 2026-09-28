@@ -19,6 +19,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import LoggedCoursesPanel from "./LoggedCoursesPanel";
 import {
   ArrowLeft,
   Check,
@@ -684,6 +685,11 @@ const AdminFamilyDetail = () => {
                 </div>
               )}
             </div>
+
+            <LoggedCoursesPanel
+              studentId={student.id}
+              studentName={student.student_name}
+            />
 
             <div>
               <div className="flex items-center justify-between mb-2">

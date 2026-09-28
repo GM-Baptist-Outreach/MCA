@@ -94,6 +94,9 @@ const AdminLayout = () => {
             <NavLink to={`${ADMIN_ROUTE}/families`} className={navLinkClass}>
               Families
             </NavLink>
+            <NavLink to={`${ADMIN_ROUTE}/pick-lists`} className={navLinkClass}>
+              Pick Lists
+            </NavLink>
             <NavLink to={`${ADMIN_ROUTE}/enroll-comp`} className={navLinkClass}>
               Enroll Without Payment
             </NavLink>

@@ -22,6 +22,19 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  companionKind,
+  companionLabel,
+  matchingCompanions,
+  paceRangeForLevel,
+  selectPacesForLevel,
+  type CompanionKind,
+} from "@/lib/loggedCourses";
+import {
+  oklahomaProductTaxCents,
+  shouldApplyOklahomaStoreTax,
+} from "@/lib/okSalesTax";
 import { ArrowLeft, Minus, Plus, ShoppingCart, Trash2, X } from "lucide-react";
 
 const SUPABASE_URL = "https://proiyioqfbjcmprsnqhf.supabase.co";
@@ -44,6 +57,7 @@ interface StoreItem {
   original_name: string;
   sales_price: number;
   active: boolean;
+  grade_level: number | null;
   subjects: { name: string } | null;
   quantity_on_hand: number | null;
 }
@@ -116,9 +130,11 @@ export default function Store() {
   const [customer, setCustomer] = useState(emptyCustomer);
   const [formError, setFormError] = useState<string | null>(null);
 
-  const [keyPrompt, setKeyPrompt] = useState<{
-    paceItem: StoreItem;
-    keyItem: StoreItem;
+  const [bundleSubjectId, setBundleSubjectId] = useState("");
+  const [bundleLevel, setBundleLevel] = useState("7");
+  const [companionPrompt, setCompanionPrompt] = useState<{
+    title: string;
+    options: Array<{ item: StoreItem; kind: CompanionKind; checked: boolean }>;
   } | null>(null);
 
   const [checkingOut, setCheckingOut] = useState(false);
@@ -138,7 +154,7 @@ export default function Store() {
         const { data, error: pageError } = await supabase
           .from("items")
           .select(
-            "id, subject_id, sku, item_type, pace_number, range_start, range_end, original_name, sales_price, active, subjects(name), inventory_levels(quantity_on_hand)",
+            "id, subject_id, sku, item_type, pace_number, range_start, range_end, grade_level, original_name, sales_price, active, subjects(name), inventory_levels(quantity_on_hand)",
           )
           .eq("active", true)
           .order("name", { foreignTable: "subjects", ascending: true })
@@ -195,31 +211,17 @@ export default function Store() {
     return map;
   }, [items]);
 
-  // Answer-key / required-resource-book matching: same subject, and the
-  // item's PACE number falls within the candidate's range_start..range_end.
-  // Covers both actual answer keys and reference books tagged with a PACE
-  // range (e.g. required reading for a Lit & Creative Writing PACE). If a
-  // PACE matches more than one (a key AND a resource book), only the first
-  // found prompts today — not a redesign of this dialog for multiple
-  // simultaneous suggestions yet.
-  const findMatchingKey = (paceItem: StoreItem): StoreItem | null => {
-    if (
-      paceItem.item_type !== "pace" ||
-      paceItem.pace_number == null ||
-      !paceItem.subject_id
-    )
-      return null;
-    return (
-      items.find(
-        (candidate) =>
-          (candidate.item_type === "key" || candidate.item_type === "other") &&
-          candidate.subject_id === paceItem.subject_id &&
-          candidate.range_start != null &&
-          candidate.range_end != null &&
-          paceItem.pace_number! >= candidate.range_start &&
-          paceItem.pace_number! <= candidate.range_end,
-      ) ?? null
+  const promptForCompanions = (paces: StoreItem[], title: string) => {
+    const matches = matchingCompanions(paces, items).filter(
+      (item): item is StoreItem =>
+        companionKind(item.item_type) != null &&
+        !cart.some((line) => line.itemId === item.id),
     );
+    const options = matches.flatMap((item) => {
+      const kind = companionKind(item.item_type);
+      return kind ? [{ item, kind, checked: true }] : [];
+    });
+    if (options.length > 0) setCompanionPrompt({ title, options });
   };
 
   const filteredItems = useMemo(() => {
@@ -258,34 +260,94 @@ export default function Store() {
       return [...prev, { itemId: item.id, quantity }];
     });
     toast({ title: "Added to cart", description: item.original_name });
-
-    const matchingKey = findMatchingKey(item);
-    if (matchingKey) {
-      const alreadyInCart = cart.some((l) => l.itemId === matchingKey.id);
-      if (!alreadyInCart) {
-        setKeyPrompt({ paceItem: item, keyItem: matchingKey });
-      }
-    }
+    if (item.item_type === "pace") promptForCompanions([item], item.original_name);
   };
 
-  const addKeyFromPrompt = () => {
-    if (!keyPrompt) return;
+  const addSelectedCompanions = () => {
+    if (!companionPrompt) return;
+    const chosen = companionPrompt.options.filter((option) => option.checked);
     setCart((prev) => {
-      const existing = prev.find((l) => l.itemId === keyPrompt.keyItem.id);
-      if (existing) {
-        return prev.map((l) =>
-          l.itemId === keyPrompt.keyItem.id
-            ? { ...l, quantity: l.quantity + 1 }
-            : l,
-        );
+      const next = [...prev];
+      for (const option of chosen) {
+        const existing = next.find((line) => line.itemId === option.item.id);
+        if (existing) existing.quantity += 1;
+        else next.push({ itemId: option.item.id, quantity: 1 });
       }
-      return [...prev, { itemId: keyPrompt.keyItem.id, quantity: 1 }];
+      return next;
     });
+    if (chosen.length > 0) {
+      toast({
+        title: chosen.length === 1 ? "Added to cart" : `Added ${chosen.length} items`,
+        description: chosen.map((option) => option.item.original_name).join(", "),
+      });
+    }
+    setCompanionPrompt(null);
+  };
+
+  const bundlePreview = useMemo(() => {
+    const level = Number(bundleLevel);
+    if (!bundleSubjectId || !Number.isInteger(level) || level < 1) return null;
+    const selected = selectPacesForLevel(
+      items.flatMap((item) =>
+        item.subject_id && item.pace_number != null
+          ? [
+              {
+                id: item.id,
+                subject_id: item.subject_id,
+                pace_number: item.pace_number,
+                grade_level: item.grade_level,
+              },
+            ]
+          : [],
+      ),
+      bundleSubjectId,
+      level,
+    );
+    const paceItems = selected
+      .map((row) => itemsById.get(row.id))
+      .filter((item): item is StoreItem => !!item);
+    const { start, end } = paceRangeForLevel(level);
+    const total = paceItems.reduce((sum, item) => sum + item.sales_price, 0);
+    return { start, end, paceItems, total };
+  }, [bundleSubjectId, bundleLevel, items, itemsById]);
+
+  const paceSubjects = useMemo(
+    () =>
+      subjects.filter((subject) =>
+        items.some(
+          (item) => item.subject_id === subject.id && item.item_type === "pace",
+        ),
+      ),
+    [subjects, items],
+  );
+
+  const addFullLevel = () => {
+    if (!bundlePreview || bundlePreview.paceItems.length === 0) {
+      toast({
+        title: "No PACEs in that level",
+        description: "This subject doesn't have catalog rows for that level.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const { paceItems, start, end } = bundlePreview;
+    setCart((prev) => {
+      const next = [...prev];
+      for (const item of paceItems) {
+        const existing = next.find((line) => line.itemId === item.id);
+        if (existing) existing.quantity += 1;
+        else next.push({ itemId: item.id, quantity: 1 });
+      }
+      return next;
+    });
+    const subjectName =
+      subjects.find((subject) => subject.id === bundleSubjectId)?.name ??
+      "Subject";
     toast({
-      title: "Added to cart",
-      description: keyPrompt.keyItem.original_name,
+      title: "Full level added",
+      description: `${subjectName} PACEs ${start}–${end} (${paceItems.length} items, full catalog price)`,
     });
-    setKeyPrompt(null);
+    promptForCompanions(paceItems, `${subjectName} PACEs ${start}–${end}`);
   };
 
   const updateQuantity = (itemId: string, quantity: number) => {
@@ -313,6 +375,13 @@ export default function Store() {
     (sum, { line, item }) => sum + line.quantity * item.sales_price,
     0,
   );
+  const showStoreTax = shouldApplyOklahomaStoreTax({
+    fulfillment: customer.fulfillment,
+    addressState: customer.addressState,
+  });
+  const estimatedTax = showStoreTax
+    ? oklahomaProductTaxCents(Math.round(cartTotal * 100)) / 100
+    : 0;
 
   const handlePlaceOrder = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -471,6 +540,62 @@ export default function Store() {
               {error}
             </div>
           )}
+
+          <div className="rounded-xl border border-border/50 bg-secondary/40 p-4 mb-6 space-y-3">
+            <div>
+              <h2 className="font-semibold text-foreground">Buy a full level</h2>
+              <p className="text-sm text-foreground/60">
+                Level N is PACEs (N−1)×12+1 through N×12 on the catalog
+                pace number (MCA internal numbering). Price is the sum of
+                those item prices. Stock still decrements per PACE.
+              </p>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
+              <div className="space-y-1.5 sm:w-64">
+                <Label>Subject</Label>
+                <Select value={bundleSubjectId} onValueChange={setBundleSubjectId}>
+                  <SelectTrigger className="bg-background">
+                    <SelectValue placeholder="Choose a subject" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {paceSubjects.map((subject) => (
+                      <SelectItem key={subject.id} value={subject.id}>
+                        {subject.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5 sm:w-36">
+                <Label>Level</Label>
+                <Select value={bundleLevel} onValueChange={setBundleLevel}>
+                  <SelectTrigger className="bg-background">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: 12 }, (_, i) => String(i + 1)).map(
+                      (level) => (
+                        <SelectItem key={level} value={level}>
+                          Level {level}
+                        </SelectItem>
+                      ),
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button type="button" onClick={addFullLevel} disabled={!bundleSubjectId}>
+                Add full level
+              </Button>
+            </div>
+            {bundlePreview && (
+              <p className="text-sm text-foreground/70">
+                PACEs {bundlePreview.start}–{bundlePreview.end}:{" "}
+                {bundlePreview.paceItems.length} in stock catalog
+                {bundlePreview.paceItems.length > 0 &&
+                  ` · $${bundlePreview.total.toFixed(2)}`}
+              </p>
+            )}
+          </div>
 
           <div className="flex flex-col sm:flex-row gap-3 mb-6">
             <Input
@@ -927,6 +1052,20 @@ export default function Store() {
                         : "Free"}
                     </span>
                   </div>
+                  <div className="flex justify-between text-sm text-foreground/70">
+                    <span>Oklahoma sales tax (10%)</span>
+                    <span>
+                      {showStoreTax
+                        ? `$${estimatedTax.toFixed(2)} on products`
+                        : "Not applied"}
+                    </span>
+                  </div>
+                  <p className="text-xs text-foreground/50">
+                    Tax applies to store products when we ship to Oklahoma or
+                    you pick up at our Newcastle office. Shipping is not taxed.
+                    Tuition is never taxed here. Coupon codes are entered on
+                    the Stripe checkout page.
+                  </p>
                   <Button
                     type="submit"
                     className="w-full"
@@ -942,30 +1081,66 @@ export default function Store() {
       )}
 
       <AlertDialog
-        open={!!keyPrompt}
-        onOpenChange={(open) => !open && setKeyPrompt(null)}
+        open={!!companionPrompt}
+        onOpenChange={(open) => !open && setCompanionPrompt(null)}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Add the matching answer key?</AlertDialogTitle>
+            <AlertDialogTitle>Add matching keys and resource books?</AlertDialogTitle>
             <AlertDialogDescription>
-              {keyPrompt && (
-                <>
-                  You added <strong>{keyPrompt.paceItem.original_name}</strong>.
-                  We also carry{" "}
-                  <strong>{keyPrompt.keyItem.original_name}</strong> ($
-                  {keyPrompt.keyItem.sales_price.toFixed(2)}), the answer key
-                  that covers it. Want to add it too?
-                </>
-              )}
+              {companionPrompt
+                ? `These cover ${companionPrompt.title}. Answer keys and required resource books are listed separately, at full price.`
+                : ""}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <div className="space-y-3 max-h-64 overflow-y-auto">
+            {companionPrompt?.options.map((option) => (
+              <label
+                key={option.item.id}
+                className="flex items-start gap-3 text-sm"
+              >
+                <Checkbox
+                  checked={option.checked}
+                  onCheckedChange={(checked) =>
+                    setCompanionPrompt((current) =>
+                      current
+                        ? {
+                            ...current,
+                            options: current.options.map((row) =>
+                              row.item.id === option.item.id
+                                ? { ...row, checked: checked === true }
+                                : row,
+                            ),
+                          }
+                        : current,
+                    )
+                  }
+                />
+                <span>
+                  <span className="font-medium">{companionLabel(option.kind)}</span>
+                  {" · "}
+                  {option.item.original_name} ($
+                  {option.item.sales_price.toFixed(2)})
+                  {option.item.range_start != null && (
+                    <span className="text-foreground/60">
+                      {" "}
+                      · PACEs {option.item.range_start}
+                      {option.item.range_end != null &&
+                      option.item.range_end !== option.item.range_start
+                        ? `–${option.item.range_end}`
+                        : ""}
+                    </span>
+                  )}
+                </span>
+              </label>
+            ))}
+          </div>
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setKeyPrompt(null)}>
+            <AlertDialogCancel onClick={() => setCompanionPrompt(null)}>
               No thanks
             </AlertDialogCancel>
-            <AlertDialogAction onClick={addKeyFromPrompt}>
-              Add Key
+            <AlertDialogAction onClick={addSelectedCompanions}>
+              Add selected
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
