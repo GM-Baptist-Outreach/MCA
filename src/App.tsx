@@ -18,6 +18,7 @@ import AdminOrders from "./pages/admin/AdminOrders";
 import AdminPlans from "./pages/admin/AdminPlans";
 import AdminInventory from "./pages/admin/AdminInventory";
 import AdminUsers from "./pages/admin/AdminUsers";
+import AdminSettings from "./pages/admin/AdminSettings";
 import AdminFamilies from "./pages/admin/AdminFamilies";
 import AdminCompEnroll from "./pages/admin/AdminCompEnroll";
 import AdminFamilyDetail from "./pages/admin/AdminFamilyDetail";
@@ -69,6 +70,7 @@ const App = () => (
             <Route path="plans" element={<AdminPlans />} />
             <Route path="inventory" element={<AdminInventory />} />
             <Route path="users" element={<AdminUsers />} />
+            <Route path="settings" element={<AdminSettings />} />
             <Route path="families" element={<AdminFamilies />} />
             <Route path="enroll-comp" element={<AdminCompEnroll />} />
             <Route path="families/:familyId" element={<AdminFamilyDetail />} />

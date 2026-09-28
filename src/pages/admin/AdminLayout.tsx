@@ -91,6 +91,9 @@ const AdminLayout = () => {
             <NavLink to={`${ADMIN_ROUTE}/users`} className={navLinkClass}>
               Admin Users
             </NavLink>
+            <NavLink to={`${ADMIN_ROUTE}/settings`} className={navLinkClass}>
+              Payments
+            </NavLink>
             <NavLink to={`${ADMIN_ROUTE}/families`} className={navLinkClass}>
               Families
             </NavLink>

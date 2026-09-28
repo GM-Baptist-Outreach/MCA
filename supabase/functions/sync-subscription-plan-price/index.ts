@@ -1,11 +1,26 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import Stripe from "npm:stripe@17.4.0";
+import { readPaymentMode, resolveStripeSecretKey } from "../_shared/paymentMode.ts";
+import { readEdgePaymentEnv } from "../_shared/readEdgeEnv.ts";
 
 // Admin-only. Called whenever David edits a subscription_plans.price in the
 // admin portal, so Stripe stays in sync without him ever touching Stripe's
 // dashboard directly. Stripe Prices are immutable, so this creates a new
 // Price and archives the old one rather than updating in place.
+//
+// The Stripe secret is the one for the active payment mode, so a Test toggle
+// creates sandbox prices and Live creates live prices. After flipping mode,
+// re-save each plan so stripe_price_id matches that mode.
+//
+// This function owns the ENTIRE price change now — reading the current
+// (still-old) price, creating the new Stripe Price, writing the new price
+// to subscription_plans, and logging both old and new to price_change_log
+// — all in one place. It used to only sync Stripe after the caller had
+// already written the new price to subscription_plans itself, which meant
+// by the time this function read "the old price" to log it, the row
+// already held the new value — old_price and new_price ended up identical
+// in every logged row. Owning the read-then-write here fixes that.
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -18,14 +33,6 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const stripeSecretKey = Deno.env.get("STRIPE_SECRET_KEY");
-    if (!stripeSecretKey) {
-      return new Response(
-        JSON.stringify({ error: "Stripe is not configured yet. Set STRIPE_SECRET_KEY and retry." }),
-        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
-    }
-
     const authHeader = req.headers.get("Authorization") ?? "";
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
@@ -50,9 +57,16 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    const { plan_id } = await req.json();
+    const { plan_id, new_price } = await req.json();
     if (!plan_id) {
       return new Response(JSON.stringify({ error: "plan_id is required" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const newPriceNum = Number(new_price);
+    if (!new_price || isNaN(newPriceNum) || newPriceNum <= 0) {
+      return new Response(JSON.stringify({ error: "A valid new_price is required" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -60,7 +74,21 @@ Deno.serve(async (req: Request) => {
 
     // Service-role client for the actual read/write (bypasses RLS).
     const admin = createClient(supabaseUrl, serviceRoleKey);
+    const mode = await readPaymentMode(admin);
+    const stripeSecretKey = resolveStripeSecretKey(mode, readEdgePaymentEnv());
+    if (!stripeSecretKey) {
+      console.error(`[sync-plan-price] No Stripe secret for payment mode ${mode}`);
+      return new Response(
+        JSON.stringify({
+          error: `Stripe is not configured for payment mode "${mode}". Set STRIPE_SECRET_KEY_${mode.toUpperCase()} (legacy STRIPE_SECRET_KEY counts as live).`,
+        }),
+        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
 
+    // Read BEFORE any write — this is the only correct source for "the old
+    // price", since subscription_plans.price hasn't been touched yet at
+    // this point in the request.
     const { data: plan, error: planError } = await admin
       .from("subscription_plans")
       .select("*")
@@ -73,6 +101,9 @@ Deno.serve(async (req: Request) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
+    const oldPriceId: string | null = plan.stripe_price_id;
+    const oldPrice = plan.price;
 
     const stripe = new Stripe(stripeSecretKey, { apiVersion: "2024-12-18.acacia" });
 
@@ -87,12 +118,9 @@ Deno.serve(async (req: Request) => {
         metadata: { subscription_plan_id: plan.id },
       });
 
-    const oldPriceId: string | null = plan.stripe_price_id;
-    const oldPrice = plan.price;
-
-    const newPrice = await stripe.prices.create({
+    const newStripePrice = await stripe.prices.create({
       product: product.id,
-      unit_amount: Math.round(Number(plan.price) * 100),
+      unit_amount: Math.round(newPriceNum * 100),
       currency: "usd",
       recurring: { interval: plan.frequency === "annual" ? "year" : "month" },
       metadata: { subscription_plan_id: plan.id },
@@ -102,10 +130,16 @@ Deno.serve(async (req: Request) => {
       await stripe.prices.update(oldPriceId, { active: false }).catch(() => {});
     }
 
-    await admin
+    const { error: updateError } = await admin
       .from("subscription_plans")
-      .update({ stripe_price_id: newPrice.id, updated_at: new Date().toISOString() })
+      .update({
+        price: newPriceNum,
+        stripe_price_id: newStripePrice.id,
+        updated_at: new Date().toISOString(),
+      })
       .eq("id", plan.id);
+
+    if (updateError) throw updateError;
 
     const { data: adminRow } = await admin
       .from("admin_users")
@@ -118,11 +152,11 @@ Deno.serve(async (req: Request) => {
       changed_by: adminRow?.id ?? null,
       change_source: "manual",
       old_price: oldPrice,
-      new_price: plan.price,
+      new_price: newPriceNum,
     });
 
     return new Response(
-      JSON.stringify({ success: true, stripe_price_id: newPrice.id, stripe_product_id: product.id }),
+      JSON.stringify({ success: true, stripe_price_id: newStripePrice.id, stripe_product_id: product.id, payment_mode: mode }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch (err) {
