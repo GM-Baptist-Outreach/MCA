@@ -10,12 +10,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { currentSchoolYear } from "@/lib/loggedCourses";
 import {
+  currentSchoolYear,
   SUBJECT_GROUPS,
   subjectGroup,
   type SubjectGroup,
-} from "@/lib/subjectGroups";
+} from "@/lib/loggedCourses";
 import type { PortalContext } from "./PortalLayout";
 
 interface Subject {

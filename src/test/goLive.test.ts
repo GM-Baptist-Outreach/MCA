@@ -6,17 +6,15 @@ import {
   isWithinShipWindow,
   matchingCompanions,
   nextQuarterPaces,
+  oklahomaProductTaxCents,
   paceRangeForLevel,
   priorIssuedMissingScores,
   reportLetter,
   selectPacesForLevel,
+  shouldApplyOklahomaStoreTax,
   suggestedFixedShipDates,
   type PaceSlotLike,
 } from "@/lib/loggedCourses";
-import {
-  oklahomaProductTaxCents,
-  shouldApplyOklahomaStoreTax,
-} from "@/lib/okSalesTax";
 
 function slot(partial: Partial<PaceSlotLike> & Pick<PaceSlotLike, "id" | "subject_id">): PaceSlotLike {
   return {

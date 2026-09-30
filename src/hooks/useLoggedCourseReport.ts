@@ -8,14 +8,12 @@ import {
   average,
   currentSchoolYear,
   isSlotCompleted,
-  reportLetter,
-  type ReportLetter,
-} from "@/lib/loggedCourses";
-import {
   quarterForCompletedAt,
+  reportLetter,
   type QuarterAverages,
+  type ReportLetter,
   type ReportQuarterKey,
-} from "@/lib/schoolQuarters";
+} from "@/lib/loggedCourses";
 
 export interface ReportCell {
   slotIndex: number;

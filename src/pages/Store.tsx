@@ -27,14 +27,12 @@ import {
   companionKind,
   companionLabel,
   matchingCompanions,
+  oklahomaProductTaxCents,
   paceRangeForLevel,
   selectPacesForLevel,
+  shouldApplyOklahomaStoreTax,
   type CompanionKind,
 } from "@/lib/loggedCourses";
-import {
-  oklahomaProductTaxCents,
-  shouldApplyOklahomaStoreTax,
-} from "@/lib/okSalesTax";
 import { ArrowLeft, Minus, Plus, ShoppingCart, Trash2, X } from "lucide-react";
 
 const SUPABASE_URL = "https://proiyioqfbjcmprsnqhf.supabase.co";

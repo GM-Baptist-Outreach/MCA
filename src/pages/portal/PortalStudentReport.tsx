@@ -1,7 +1,7 @@
 import { useOutletContext } from "react-router-dom";
 import type { PortalContext } from "./PortalLayout";
 import { useLoggedCourseReport } from "@/hooks/useLoggedCourseReport";
-import { REPORT_QUARTERS } from "@/lib/schoolQuarters";
+import { REPORT_QUARTERS } from "@/lib/loggedCourses";
 import { ReportChrome } from "./ReportChrome";
 
 function formatAvg(value: number | null): string {
