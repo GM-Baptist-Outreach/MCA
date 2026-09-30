@@ -29,6 +29,63 @@ const SCORE_LOOKBACK = 6;
 const UNISSUED = new Set(["prescribed", "ordered", "in_stock"]);
 const ISSUED = new Set(["issued", "passed", "failed"]);
 
+// Keep in sync with src/lib/subjectGroups.ts ENGLISH_SUBJECT_PATTERN.
+const ENGLISH_SUBJECT_PATTERN =
+  /\b(english|literature)\b|\blit\b|creative writing/i;
+
+function isEnglishSubjectName(name: string): boolean {
+  return ENGLISH_SUBJECT_PATTERN.test(name);
+}
+
+interface CatalogItem {
+  id: string;
+  subject_id: string | null;
+  item_type: string;
+  range_start: number | null;
+  range_end: number | null;
+  subject_name: string;
+}
+
+interface CompanionLine extends CatalogItem {
+  pace_number: number;
+}
+
+function matchPickCompanions(slots: SlotRow[], catalog: CatalogItem[]): CompanionLine[] {
+  const paceItemIds = new Set(
+    slots.map((slot) => slot.item_id).filter((id): id is string => !!id),
+  );
+  const matches = new Map<string, CompanionLine>();
+  for (const slot of slots) {
+    const paceSubject = subjectName(slot);
+    for (const item of catalog) {
+      if (paceItemIds.has(item.id)) continue;
+      if (item.range_start == null || item.range_end == null) continue;
+      if (slot.pace_number < item.range_start || slot.pace_number > item.range_end) continue;
+      const sameSubject = item.subject_id != null && item.subject_id === slot.subject_id;
+      const key = item.item_type === "key" && sameSubject;
+      const novel =
+        item.item_type === "other" &&
+        isEnglishSubjectName(item.subject_name) &&
+        (sameSubject || isEnglishSubjectName(paceSubject));
+      if (!key && !novel) continue;
+      const existing = matches.get(item.id);
+      if (existing) {
+        existing.pace_number = Math.min(existing.pace_number, slot.pace_number);
+        continue;
+      }
+      matches.set(item.id, { ...item, pace_number: slot.pace_number });
+    }
+  }
+  return [...matches.values()];
+}
+
+function catalogSubjectName(
+  rel: { name: string } | { name: string }[] | null,
+): string {
+  if (Array.isArray(rel)) return rel[0]?.name ?? "";
+  return rel?.name ?? "";
+}
+
 interface SlotRow {
   id: string;
   student_id: string;
@@ -138,7 +195,7 @@ async function sendReminder(input: {
     `Before MCA can ship the next PACEs for ${input.studentName}, we need scores for these already-issued PACEs:`,
     lines,
     ``,
-    `Please submit them in the parent portal (Progress) or call us at (844) 663-4477.`,
+    `Please submit them in the parent portal (Upload Tests) or call us at (844) 663-4477.`,
     ``,
     `ACE remains the official grade record. This reminder is only about the shipment.`,
     ``,
@@ -362,20 +419,50 @@ async function buildForSchedule(
     return { student_id: schedule.student_id, skipped: "no unissued PACEs" };
   }
 
-  const itemIds = quarter.map((slot) => slot.item_id).filter((id): id is string => !!id);
+  const { data: catalogRows, error: catalogError } = await admin
+    .from("items")
+    .select("id, subject_id, item_type, range_start, range_end, subjects(name)")
+    .in("item_type", ["key", "other"]);
+  if (catalogError) throw catalogError;
+  const catalog: CatalogItem[] = (catalogRows ?? []).map((row) => ({
+    id: row.id,
+    subject_id: row.subject_id,
+    item_type: row.item_type,
+    range_start: row.range_start,
+    range_end: row.range_end,
+    subject_name: catalogSubjectName(
+      row.subjects as { name: string } | { name: string }[] | null,
+    ),
+  }));
+  const companions = matchPickCompanions(quarter, catalog);
+
+  const itemIds = [
+    ...quarter.map((slot) => slot.item_id),
+    ...companions.map((item) => item.id),
+  ].filter((id): id is string => !!id);
   const onHand = new Map<string, number>();
+  const tracked = new Set<string>();
   if (itemIds.length > 0) {
     const { data: levels } = await admin
       .from("inventory_levels")
       .select("item_id, quantity_on_hand")
       .in("item_id", itemIds);
     for (const level of levels ?? []) {
+      tracked.add(level.item_id);
       onHand.set(
         level.item_id,
         (onHand.get(level.item_id) ?? 0) + Number(level.quantity_on_hand ?? 0),
       );
     }
   }
+
+  const stockColumns = (itemId: string | null) => {
+    if (!itemId || !tracked.has(itemId)) {
+      return { quantity_on_hand: null as number | null, backordered: false };
+    }
+    const quantity = onHand.get(itemId) ?? 0;
+    return { quantity_on_hand: quantity, backordered: quantity <= 0 };
+  };
 
   const { data: pick, error: pickError } = await admin
     .from("pick_lists")
@@ -396,17 +483,26 @@ async function buildForSchedule(
   if (pickError) throw pickError;
 
   await admin.from("pick_list_items").delete().eq("pick_list_id", pick.id);
-  const { error: itemError } = await admin.from("pick_list_items").insert(
-    quarter.map((slot) => ({
+  const { error: itemError } = await admin.from("pick_list_items").insert([
+    ...quarter.map((slot) => ({
       pick_list_id: pick.id,
       pace_slot_id: slot.id,
       subject_id: slot.subject_id,
       pace_number: slot.pace_number,
       item_id: slot.item_id,
       quantity_needed: 1,
-      quantity_on_hand: slot.item_id ? onHand.get(slot.item_id) ?? null : null,
+      ...stockColumns(slot.item_id),
     })),
-  );
+    ...companions.map((item) => ({
+      pick_list_id: pick.id,
+      pace_slot_id: null,
+      subject_id: item.subject_id,
+      pace_number: item.pace_number,
+      item_id: item.id,
+      quantity_needed: 1,
+      ...stockColumns(item.id),
+    })),
+  ]);
   if (itemError) throw itemError;
 
   const prescribedIds = quarter

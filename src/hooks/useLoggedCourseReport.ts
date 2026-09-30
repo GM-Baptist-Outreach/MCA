@@ -1,14 +1,21 @@
 /** Supervisor report, student report, and star chart.
- * Prescribed boxes come from student_pace_slots. Scores fall back to score_reports.
+ * Prescribed boxes come from student_pace_slots. Scores fall back to score_reports
+ * only for passed/failed slots, or when the report is newer than issued_at.
  */
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import {
   average,
   currentSchoolYear,
+  isSlotCompleted,
   reportLetter,
   type ReportLetter,
 } from "@/lib/loggedCourses";
+import {
+  quarterForCompletedAt,
+  type QuarterAverages,
+  type ReportQuarterKey,
+} from "@/lib/schoolQuarters";
 
 export interface ReportCell {
   slotIndex: number;
@@ -16,6 +23,7 @@ export interface ReportCell {
   status: string;
   score: number | null;
   date: string | null;
+  completedAt: string | null;
   letter: ReportLetter;
 }
 
@@ -24,7 +32,9 @@ export interface SubjectGrid {
   subjectName: string;
   cells: ReportCell[];
   average: number | null;
+  quarterAverages: QuarterAverages;
   completed: number;
+  remaining: number;
 }
 
 export interface StarPace {
@@ -64,6 +74,31 @@ function parseScore(value: string | number | null | undefined): number | null {
   if (value == null || value === "") return null;
   const num = typeof value === "number" ? value : parseFloat(value);
   return Number.isNaN(num) ? null : num;
+}
+
+function emptyQuarterAverages(): QuarterAverages {
+  return { Q1: null, Q2: null, Q3: null, Q4: null };
+}
+
+function quarterAveragesFor(cells: ReportCell[], schoolYear: string): QuarterAverages {
+  const grouped: Record<ReportQuarterKey, number[]> = {
+    Q1: [],
+    Q2: [],
+    Q3: [],
+    Q4: [],
+  };
+  for (const cell of cells) {
+    if (cell.score == null) continue;
+    const quarter = quarterForCompletedAt(cell.completedAt, schoolYear);
+    if (!quarter) continue;
+    grouped[quarter].push(cell.score);
+  }
+  return {
+    Q1: average(grouped.Q1),
+    Q2: average(grouped.Q2),
+    Q3: average(grouped.Q3),
+    Q4: average(grouped.Q4),
+  };
 }
 
 export function useLoggedCourseReport(studentId: string | undefined) {
@@ -125,6 +160,7 @@ export function useLoggedCourseReport(studentId: string | undefined) {
               status: "",
               score: null,
               date: null,
+              completedAt: null,
               letter: "" as ReportLetter,
             };
           }
@@ -133,28 +169,44 @@ export function useLoggedCourseReport(studentId: string | undefined) {
               score.subject_id === subjectId &&
               score.pace_number === slot.pace_number,
           );
-          const score = slot.score ?? parseScore(reported?.score);
-          const date = slot.completed_at ?? reported?.reported_at?.slice(0, 10) ?? slot.issued_at;
+          const reportedScore = parseScore(reported?.score);
+          const reportedDay = reported?.reported_at?.slice(0, 10) ?? null;
+          const passedOrFailed = slot.status === "passed" || slot.status === "failed";
+          const newerThanIssue =
+            !!reportedDay && !!slot.issued_at && reportedDay > slot.issued_at;
+          const useReport =
+            slot.score == null &&
+            reportedScore != null &&
+            (passedOrFailed || newerThanIssue);
+          const score = slot.score ?? (useReport ? reportedScore : null);
+          const completedAt =
+            slot.completed_at ?? (useReport ? reportedDay : null);
           return {
             slotIndex: slot.slot_index,
             paceNumber: slot.pace_number,
             status: slot.status,
             score,
-            date,
+            date: completedAt,
+            completedAt,
             letter: reportLetter(slot.status, score),
           };
         });
-        const completed = cells.filter((cell) => cell.letter === "P").length;
+        const prescribed = cells.filter((cell) => cell.paceNumber != null);
+        const completed = prescribed.filter((cell) =>
+          isSlotCompleted(cell.status, cell.score),
+        ).length;
         return {
           subjectId,
           subjectName: subjectNameOf(subjectSlots[0]),
           cells,
           average: average(cells.map((cell) => cell.score)),
+          quarterAverages: quarterAveragesFor(cells, schoolYear),
           completed,
+          remaining: prescribed.length - completed,
         };
       })
       .sort((a, b) => a.subjectName.localeCompare(b.subjectName));
-  }, [slots, scores]);
+  }, [slots, scores, schoolYear]);
 
   const stars = useMemo<StarPace[]>(() => {
     const seen = new Set<string>();
@@ -195,6 +247,7 @@ export function useLoggedCourseReport(studentId: string | undefined) {
 
   const overall = average(grids.map((grid) => grid.average));
   const completed = grids.reduce((sum, grid) => sum + grid.completed, 0);
+  const remaining = grids.reduce((sum, grid) => sum + grid.remaining, 0);
 
   return {
     schoolYear,
@@ -204,5 +257,6 @@ export function useLoggedCourseReport(studentId: string | undefined) {
     stars,
     overall,
     completed,
+    remaining,
   };
 }

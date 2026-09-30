@@ -171,6 +171,7 @@ Deno.serve(async (req: Request) => {
         },
         body: JSON.stringify({
           from: "Midwest Christian Academy <admin@mcahomeschool.com>",
+          reply_to: "david@midwestchristianacademy.com",
           to: [family.email],
           subject: `Set up payment for ${student.student_name}'s enrollment`,
           html: `
@@ -179,7 +180,7 @@ Deno.serve(async (req: Request) => {
               <p>Hi ${firstName},</p>
               <p>${student.student_name}'s enrollment is ready to move to a paid plan - ${frequency}, $${plan.price}. Everything else stays exactly the same: their student record, your Parent Portal access, all of it. You just need to add a payment method.</p>
               <p><a href="${session.url}" style="display:inline-block;background:#1a1a2e;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;">Set Up Payment</a></p>
-              <p>Questions? Call us at (844) 663-4477 or reach out at admin@mcahomeschool.com.</p>
+              <p>Questions? Call us at (844) 663-4477 or reach out at david@midwestchristianacademy.com.</p>
             </div>
           `,
         }),

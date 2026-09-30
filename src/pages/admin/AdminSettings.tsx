@@ -3,6 +3,11 @@ import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -92,8 +97,12 @@ const AdminSettings = () => {
     <div className="space-y-6 max-w-2xl">
       <div>
         <h2 className="text-2xl font-bold font-serif text-primary mb-2">
-          Payments
+          Payment Mode (Test/Live)
         </h2>
+        <p className="text-sm text-foreground/80">
+          Leave this on Live. Only switch to Test when a developer is testing
+          checkout. While in Test, families cannot actually pay.
+        </p>
         <p className="text-sm text-foreground/60">
           One switch for Stripe and Shippo. It is saved in the database and
           read on the next checkout, so flipping it does not require a redeploy.
@@ -151,22 +160,31 @@ const AdminSettings = () => {
           Test = Stripe Sandbox + Shippo test rates; Live = real charges +
           real Shippo rates (or tier fallback).
         </p>
-        <ul className="text-sm text-foreground/60 list-disc pl-5 space-y-1">
-          <li>
-            Store orders that ship use Shippo when that mode&apos;s key is set.
-            If the key is missing or Shippo fails, shipping falls back to the
-            quantity tiers and checkout still opens.
-          </li>
-          <li>Local pickup and tuition never call Shippo.</li>
-          <li>
-            Enrollment checkout, store checkout, plan price sync, refunds, and
-            cancellations use the Stripe secret for this mode.
-          </li>
-          <li>
-            After switching, re-save subscription plan prices so the Stripe
-            price IDs belong to the same mode.
-          </li>
-        </ul>
+        <Collapsible>
+          <CollapsibleTrigger asChild>
+            <Button type="button" variant="ghost" className="h-auto px-0 text-sm font-medium">
+              Details for developers
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <ul className="text-sm text-foreground/60 list-disc pl-5 space-y-1 pt-2">
+              <li>
+                Store orders that ship use Shippo when that mode&apos;s key is set.
+                If the key is missing or Shippo fails, shipping falls back to the
+                quantity tiers and checkout still opens.
+              </li>
+              <li>Local pickup and tuition never call Shippo.</li>
+              <li>
+                Enrollment checkout, store checkout, plan price sync, refunds, and
+                cancellations use the Stripe secret for this mode.
+              </li>
+              <li>
+                After switching, re-save subscription plan prices so the Stripe
+                price IDs belong to the same mode.
+              </li>
+            </ul>
+          </CollapsibleContent>
+        </Collapsible>
       </section>
 
       <AlertDialog

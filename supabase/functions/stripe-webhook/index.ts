@@ -181,6 +181,7 @@ Deno.serve(async (req: Request) => {
       },
       body: JSON.stringify({
         from: "Midwest Christian Academy <admin@mcahomeschool.com>",
+        reply_to: "david@midwestchristianacademy.com",
         to: [to],
         subject,
         html,
@@ -354,7 +355,7 @@ Deno.serve(async (req: Request) => {
                 <div style="font-family: Georgia, serif; color: #1a1a2e; max-width: 600px;">
                   <h2>Payment Set Up</h2>
                   <p>Thanks! ${student?.student_name ?? "Your student"}'s enrollment is now on a paid ${frequency} plan${plan?.price != null ? ` ($${plan.price})` : ""}. Nothing else changes — same student record, same Parent Portal access.</p>
-                  <p>If you have any questions, reach out to admin@mcahomeschool.com or call (844) 663-4477.</p>
+                  <p>If you have any questions, reach out to david@midwestchristianacademy.com or call (844) 663-4477.</p>
                 </div>
               `
             );
@@ -723,7 +724,7 @@ Deno.serve(async (req: Request) => {
               <h2>${isReturningFamily ? "Enrollment Added" : "Enrollment Confirmed"}</h2>
               <p>Thank you for enrolling with Midwest Christian Academy. Here's a summary:</p>
               <ul>${summaryHtml}</ul>
-              <p>If you have any questions, reach out to admin@mcahomeschool.com or call (844) 663-4477.</p>
+              <p>If you have any questions, reach out to david@midwestchristianacademy.com or call (844) 663-4477.</p>
             </div>
           `
         );

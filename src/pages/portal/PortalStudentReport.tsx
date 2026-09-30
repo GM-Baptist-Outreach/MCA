@@ -1,7 +1,12 @@
 import { useOutletContext } from "react-router-dom";
 import type { PortalContext } from "./PortalLayout";
 import { useLoggedCourseReport } from "@/hooks/useLoggedCourseReport";
-import { ReportChrome, scoreTone } from "./ReportChrome";
+import { REPORT_QUARTERS } from "@/lib/schoolQuarters";
+import { ReportChrome } from "./ReportChrome";
+
+function formatAvg(value: number | null): string {
+  return value != null ? `${value.toFixed(1)}%` : "n/a";
+}
 
 export default function PortalStudentReport() {
   const { selectedStudent } = useOutletContext<PortalContext>();
@@ -17,7 +22,21 @@ export default function PortalStudentReport() {
       studentName={selectedStudent.student_name}
       schoolYear={report.schoolYear}
       onSchoolYear={report.setSchoolYear}
+      stats={[
+        {
+          label: "Year average",
+          value: report.overall != null ? `${report.overall.toFixed(1)}%` : "n/a",
+        },
+        { label: "PACEs completed", value: String(report.completed) },
+        { label: "Remaining", value: String(report.remaining) },
+      ]}
     >
+      <p className="text-sm text-foreground/60">
+        Quarters follow the school year. Q1 is Aug-Oct, Q2 is Nov-Dec, Q3 is
+        Jan-Mar, and Q4 is Apr-Jul. {report.schoolYear} runs from August of the
+        first year through July of the next. Each quarter average uses the
+        completion date.
+      </p>
       {report.loading ? (
         <p className="text-foreground/60">Loading...</p>
       ) : report.grids.length === 0 ? (
@@ -25,60 +44,37 @@ export default function PortalStudentReport() {
           No logged courses for {report.schoolYear}.
         </p>
       ) : (
-        <div className="overflow-x-auto border border-border rounded-lg">
-          <table className="w-full text-sm">
+        <div className="overflow-x-auto border border-border rounded-lg print:overflow-visible">
+          <table className="w-full text-sm print:text-xs">
             <thead className="bg-secondary/70 text-left">
               <tr>
                 <th className="p-3 font-semibold">Subject</th>
-                <th className="p-3 font-semibold">PACEs</th>
-                <th className="p-3 font-semibold">Completed</th>
-                <th className="p-3 font-semibold">Average</th>
+                {REPORT_QUARTERS.map((quarter) => (
+                  <th key={quarter.key} className="p-3 font-semibold">
+                    {quarter.label}
+                  </th>
+                ))}
+                <th className="p-3 font-semibold">Year</th>
+                <th className="p-3 font-semibold">Remaining</th>
               </tr>
             </thead>
             <tbody>
               {report.grids.map((grid) => (
-                <tr key={grid.subjectId} className="border-t border-border/60 align-top">
+                <tr key={grid.subjectId} className="border-t border-border/60 break-inside-avoid">
                   <td className="p-3 font-medium">{grid.subjectName}</td>
-                  <td className="p-3">
-                    <div className="flex flex-wrap gap-1">
-                      {grid.cells
-                        .filter((cell) => cell.paceNumber != null)
-                        .map((cell) => (
-                          <span
-                            key={cell.slotIndex}
-                            className={`inline-flex min-w-10 justify-center rounded border border-border px-1.5 py-0.5 text-xs ${scoreTone(cell.score, cell.letter)}`}
-                            title={cell.date ?? undefined}
-                          >
-                            {cell.paceNumber}
-                            {cell.letter ? ` ${cell.letter}` : ""}
-                            {cell.score != null ? ` ${cell.score}` : ""}
-                          </span>
-                        ))}
-                    </div>
-                  </td>
-                  <td className="p-3">{grid.completed}</td>
-                  <td className="p-3">
-                    {grid.average != null ? `${grid.average.toFixed(1)}%` : "—"}
-                  </td>
+                  {REPORT_QUARTERS.map((quarter) => (
+                    <td key={quarter.key} className="p-3">
+                      {formatAvg(grid.quarterAverages[quarter.key])}
+                    </td>
+                  ))}
+                  <td className="p-3">{formatAvg(grid.average)}</td>
+                  <td className="p-3">{grid.remaining}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
-
-      <div className="grid sm:grid-cols-2 gap-4">
-        <div className="rounded-lg border border-border p-4">
-          <p className="text-xs uppercase tracking-wide text-foreground/50">Overall average</p>
-          <p className="text-3xl font-serif text-primary">
-            {report.overall != null ? `${report.overall.toFixed(1)}%` : "—"}
-          </p>
-        </div>
-        <div className="rounded-lg border border-border p-4">
-          <p className="text-xs uppercase tracking-wide text-foreground/50">PACEs completed</p>
-          <p className="text-3xl font-serif text-primary">{report.completed}</p>
-        </div>
-      </div>
     </ReportChrome>
   );
 }

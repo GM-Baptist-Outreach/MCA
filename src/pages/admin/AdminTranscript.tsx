@@ -20,9 +20,6 @@ interface Completion {
   final_average: number | null;
   letter_grade: string | null;
   credit_earned: number;
-  days_present: number | null;
-  absences: number | null;
-  class_rank: string | null;
 }
 
 // Standard unweighted 4.0 scale, matched to MCA's own transcript form.
@@ -71,7 +68,7 @@ export default function AdminTranscript() {
         supabase
           .from("course_completions")
           .select(
-            "id, subject_name, school_year, final_average, letter_grade, credit_earned, days_present, absences, class_rank",
+            "id, subject_name, school_year, final_average, letter_grade, credit_earned",
           )
           .eq("student_id", studentId)
           .not("final_average", "is", null)
@@ -132,14 +129,8 @@ export default function AdminTranscript() {
       (sum, c) => sum + c.credit_earned,
       0,
     );
-    const daysPresent =
-      yearCompletions.find((c) => c.days_present != null)?.days_present ?? null;
-    const absences =
-      yearCompletions.find((c) => c.absences != null)?.absences ?? null;
-    return { avg, credits, daysPresent, absences };
+    return { avg, credits };
   };
-
-  const classRank = completions.find((c) => c.class_rank)?.class_rank ?? "";
 
   const handlePrint = () => {
     if (!student) return;
@@ -170,8 +161,6 @@ export default function AdminTranscript() {
             <div class="year-summary">
               <span>Yearly Average: ${stats.avg != null ? stats.avg.toFixed(2) : "—"}</span>
               <span>Total Credits: ${stats.credits.toFixed(2)}</span>
-              <span>Days Present: ${stats.daysPresent ?? "—"}</span>
-              <span>Absences: ${stats.absences ?? "—"}</span>
             </div>
           </div>`;
       })
@@ -210,7 +199,6 @@ export default function AdminTranscript() {
             <div><strong>GPA:</strong> ${overallGpa != null ? overallGpa.toFixed(2) : "—"}</div>
             <div><strong>High School Average:</strong> ${overallAverage != null ? overallAverage.toFixed(2) : "—"}</div>
             <div><strong>Total Credits:</strong> ${totalCredits.toFixed(2)}</div>
-            <div><strong>Class Rank:</strong> ${escapeHtml(classRank) || "—"}</div>
           </div>
           ${yearsHtml}
           <div class="signature">Administrator's Signature</div>
@@ -282,7 +270,7 @@ export default function AdminTranscript() {
         Projection page instead.
       </p>
 
-      <div className="rounded-xl border border-border/50 bg-background p-5 grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+      <div className="rounded-xl border border-border/50 bg-background p-5 grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
         <div>
           <p className="text-foreground/50 text-xs uppercase">GPA</p>
           <p className="font-semibold">
@@ -298,10 +286,6 @@ export default function AdminTranscript() {
         <div>
           <p className="text-foreground/50 text-xs uppercase">Total Credits</p>
           <p className="font-semibold">{totalCredits.toFixed(2)}</p>
-        </div>
-        <div>
-          <p className="text-foreground/50 text-xs uppercase">Class Rank</p>
-          <p className="font-semibold">{classRank || "—"}</p>
         </div>
       </div>
 
@@ -345,8 +329,6 @@ export default function AdminTranscript() {
                     {stats.avg != null ? stats.avg.toFixed(2) : "—"}
                   </span>
                   <span>Total Credits: {stats.credits.toFixed(2)}</span>
-                  <span>Days Present: {stats.daysPresent ?? "—"}</span>
-                  <span>Absences: {stats.absences ?? "—"}</span>
                 </div>
               </div>
             );

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -61,6 +61,29 @@ const ITEM_TYPES: { value: ItemType; label: string }[] = [
   { value: "dvd", label: "DVD" },
   { value: "other", label: "Other" },
 ];
+
+const TYPE_SORT: Record<ItemType, number> = {
+  pace: 0,
+  key: 1,
+  dvd: 2,
+  other: 3,
+};
+
+function compareInventoryItems(a: Item, b: Item): number {
+  const bySubject = (a.subjects?.name ?? "").localeCompare(b.subjects?.name ?? "", undefined, {
+    numeric: true,
+  });
+  if (bySubject !== 0) return bySubject;
+  const byType = (TYPE_SORT[a.item_type] ?? 99) - (TYPE_SORT[b.item_type] ?? 99);
+  if (byType !== 0) return byType;
+  const byNumber = String(a.pace_number ?? a.range_start ?? "").localeCompare(
+    String(b.pace_number ?? b.range_start ?? ""),
+    undefined,
+    { numeric: true },
+  );
+  if (byNumber !== 0) return byNumber;
+  return a.original_name.localeCompare(b.original_name, undefined, { numeric: true });
+}
 
 const PAGE_SIZE = 50;
 const SUPABASE_URL = "https://proiyioqfbjcmprsnqhf.supabase.co";
@@ -274,7 +297,7 @@ export default function AdminInventory() {
         .join(" ")
         .toLowerCase();
       return haystack.includes(q);
-    });
+    }).sort(compareInventoryItems);
   }, [items, search, subjectFilter, typeFilter]);
 
   useEffect(() => {
@@ -489,7 +512,7 @@ export default function AdminInventory() {
 
     setItems((prev) =>
       [...prev, { ...(data as unknown as Item), quantity_on_hand: null }].sort(
-        (a, b) => a.original_name.localeCompare(b.original_name),
+        compareInventoryItems,
       ),
     );
     setAdding(false);
@@ -827,9 +850,22 @@ export default function AdminInventory() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {visibleItems.map((item) => (
+            {visibleItems.map((item, index) => {
+              const subjectName = item.subjects?.name ?? "No subject";
+              const previousName =
+                index > 0
+                  ? visibleItems[index - 1].subjects?.name ?? "No subject"
+                  : null;
+              return (
+              <Fragment key={item.id}>
+              {subjectName !== previousName && (
+                <TableRow className="bg-secondary/70 hover:bg-secondary/70">
+                  <TableCell colSpan={8} className="font-semibold">
+                    {subjectName}
+                  </TableCell>
+                </TableRow>
+              )}
               <TableRow
-                key={item.id}
                 className={item.active ? "" : "opacity-50"}
               >
                 <TableCell className="font-medium">
@@ -940,7 +976,9 @@ export default function AdminInventory() {
                   )}
                 </TableCell>
               </TableRow>
-            ))}
+              </Fragment>
+              );
+            })}
             {visibleItems.length === 0 && (
               <TableRow>
                 <TableCell

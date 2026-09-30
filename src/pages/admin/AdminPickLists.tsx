@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
+import { Printer } from "lucide-react";
 
 const SUPABASE_URL = "https://proiyioqfbjcmprsnqhf.supabase.co";
 
@@ -18,17 +19,19 @@ interface PickList {
     id: string;
     pace_number: number;
     quantity_on_hand: number | null;
+    backordered: boolean | null;
     subjects: { name: string } | { name: string }[] | null;
+    items: { original_name: string } | { original_name: string }[] | null;
   }>;
 }
 
-function nameOf(
-  rel: { student_name?: string; name?: string } | { student_name?: string; name?: string }[] | null,
-  key: "student_name" | "name",
+function relText(
+  rel: Record<string, string> | Record<string, string>[] | null,
+  key: string,
 ): string {
-  if (!rel) return "—";
+  if (!rel) return "";
   const row = Array.isArray(rel) ? rel[0] : rel;
-  return (row?.[key] as string) ?? "—";
+  return row?.[key] ?? "";
 }
 
 export default function AdminPickLists() {
@@ -36,13 +39,14 @@ export default function AdminPickLists() {
   const [lists, setLists] = useState<PickList[]>([]);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
+  const [printScope, setPrintScope] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
     const { data, error } = await supabase
       .from("pick_lists")
       .select(
-        "id, school_year, ship_date, status, paused_for_missing_scores, notes, reminder_email_sent_at, students(student_name), pick_list_items(id, pace_number, quantity_on_hand, subjects(name))",
+        "id, school_year, ship_date, status, paused_for_missing_scores, notes, reminder_email_sent_at, students(student_name), pick_list_items(id, pace_number, quantity_on_hand, backordered, subjects(name), items(original_name))",
       )
       .order("ship_date", { ascending: false })
       .limit(100);
@@ -57,6 +61,17 @@ export default function AdminPickLists() {
   useEffect(() => {
     load();
   }, []);
+
+  useEffect(() => {
+    if (!printScope) return;
+    const finish = () => setPrintScope(null);
+    window.addEventListener("afterprint", finish);
+    const timer = window.setTimeout(() => window.print(), 0);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("afterprint", finish);
+    };
+  }, [printScope]);
 
   const generateDue = async () => {
     setRunning(true);
@@ -86,54 +101,98 @@ export default function AdminPickLists() {
     setRunning(false);
   };
 
+  const readyCount = lists.filter((list) => list.status === "ready").length;
+
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
+    <div className="space-y-6 print:space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap print:hidden">
         <div>
           <h2 className="text-2xl font-bold font-serif text-primary">Pick lists</h2>
           <p className="text-sm text-foreground/60">
             Due lists are the ones whose next ship date is within 7 days.
-            Paused rows are the admin flag for missing scores.
+            Paused rows are the admin flag for missing scores. A backordered
+            line still ships with the rest of the list.
           </p>
         </div>
-        <Button onClick={generateDue} disabled={running}>
-          {running ? "Running..." : "Generate due pick lists"}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            onClick={() => setPrintScope("all-ready")}
+            disabled={readyCount === 0}
+          >
+            <Printer className="h-4 w-4 mr-1.5" />
+            Print all ready
+          </Button>
+          <Button onClick={generateDue} disabled={running}>
+            {running ? "Running..." : "Generate due pick lists"}
+          </Button>
+        </div>
       </div>
 
       {loading ? (
-        <p className="text-foreground/60">Loading...</p>
+        <p className="text-foreground/60 print:hidden">Loading...</p>
       ) : lists.length === 0 ? (
-        <p className="text-foreground/60">No pick lists yet.</p>
+        <p className="text-foreground/60 print:hidden">No pick lists yet.</p>
       ) : (
-        <div className="space-y-3">
-          {lists.map((list) => (
-            <div key={list.id} className="rounded-xl border border-border/60 p-4 space-y-2">
-              <div className="flex justify-between gap-3 flex-wrap">
-                <p className="font-medium">
-                  {nameOf(list.students, "student_name")} · {list.ship_date} · {list.school_year}
-                </p>
-                <p className="text-sm capitalize">
-                  {list.status}
-                  {list.paused_for_missing_scores ? " · paused for missing scores" : ""}
-                </p>
+        <div className="space-y-3 print:space-y-4 print:columns-1">
+          {lists.map((list) => {
+            const hideOnPrint =
+              printScope === "all-ready"
+                ? list.status !== "ready"
+                : printScope != null && printScope !== list.id;
+            return (
+              <div
+                key={list.id}
+                className={`rounded-xl border border-border/60 p-4 space-y-2 break-inside-avoid ${
+                  hideOnPrint ? "print:hidden" : ""
+                }`}
+              >
+                <div className="flex justify-between gap-3 flex-wrap">
+                  <p className="font-medium">
+                    {relText(list.students, "student_name") || "Student"} · {list.ship_date} · {list.school_year}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm capitalize">
+                      {list.status}
+                      {list.paused_for_missing_scores ? " · paused for missing scores" : ""}
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="print:hidden"
+                      onClick={() => setPrintScope(list.id)}
+                    >
+                      <Printer className="h-4 w-4 mr-1.5" />
+                      Print
+                    </Button>
+                  </div>
+                </div>
+                {list.notes && <p className="text-sm text-foreground/70">{list.notes}</p>}
+                {list.reminder_email_sent_at && (
+                  <p className="text-xs text-foreground/50">
+                    Reminder emailed {new Date(list.reminder_email_sent_at).toLocaleString()}
+                  </p>
+                )}
+                <ul className="text-sm text-foreground/80 columns-2 print:columns-1">
+                  {list.pick_list_items.map((item) => {
+                    const itemName = relText(item.items, "original_name");
+                    return (
+                      <li key={item.id} className="break-inside-avoid">
+                        {relText(item.subjects, "name") || "Subject"} {item.pace_number}
+                        {itemName ? ` · ${itemName}` : ""}
+                        {item.quantity_on_hand != null ? ` · on hand ${item.quantity_on_hand}` : ""}
+                        {item.backordered ? (
+                          <span className="ml-2 text-xs font-semibold text-destructive">
+                            Backordered
+                          </span>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
               </div>
-              {list.notes && <p className="text-sm text-foreground/70">{list.notes}</p>}
-              {list.reminder_email_sent_at && (
-                <p className="text-xs text-foreground/50">
-                  Reminder emailed {new Date(list.reminder_email_sent_at).toLocaleString()}
-                </p>
-              )}
-              <ul className="text-sm text-foreground/80 columns-2">
-                {list.pick_list_items.map((item) => (
-                  <li key={item.id}>
-                    {nameOf(item.subjects, "name")} {item.pace_number}
-                    {item.quantity_on_hand != null ? ` · on hand ${item.quantity_on_hand}` : ""}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

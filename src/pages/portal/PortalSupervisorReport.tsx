@@ -1,43 +1,67 @@
 import { useOutletContext } from "react-router-dom";
 import type { PortalContext } from "./PortalLayout";
 import { useLoggedCourseReport, type ReportCell } from "@/hooks/useLoggedCourseReport";
-import { REPORT_LEGEND, ReportChrome, scoreTone } from "./ReportChrome";
+import { ReportChrome, scoreTone } from "./ReportChrome";
 
-function formatReportDate(iso: string | null): string {
-  if (!iso) return "";
-  const [year, month, day] = iso.slice(0, 10).split("-");
-  if (!year || !month || !day) return iso;
-  return `${Number(month)}/${Number(day)}/${year}`;
+function formatAvg(value: number | null): string {
+  return value != null ? value.toFixed(1) : "n/a";
 }
 
-function PaceColumn({ cells }: { cells: ReportCell[] }) {
+function SubjectGridTable({
+  subjectName,
+  cells,
+  average,
+  remaining,
+}: {
+  subjectName: string;
+  cells: ReportCell[];
+  average: number | null;
+  remaining: number;
+}) {
   return (
-    <table className="w-full text-sm">
-      <thead>
-        <tr className="text-left text-[10px] uppercase tracking-wide text-foreground/50 border-b border-border/70">
-          <th className="px-3 py-1.5 font-semibold w-16">PACE</th>
-          <th className="px-2 py-1.5 font-semibold w-16">Status</th>
-          <th className="px-2 py-1.5 font-semibold w-16">Score</th>
-          <th className="px-2 py-1.5 font-semibold">Date</th>
-        </tr>
-      </thead>
-      <tbody>
-        {cells.map((cell) => (
-          <tr key={cell.slotIndex} className="border-t border-border/40">
-            <td className="px-3 py-1.5 font-medium">{cell.paceNumber ?? ""}</td>
-            <td className={`px-2 py-1.5 ${scoreTone(cell.score, cell.letter)}`}>
-              {cell.letter}
+    <div className="overflow-x-auto print:overflow-visible break-inside-avoid">
+      <table className="w-full border-collapse text-sm print:text-[10px]">
+        <thead>
+          <tr>
+            <th className="border border-border px-2 py-1 text-left align-bottom min-w-28">
+              {subjectName}
+            </th>
+            {cells.map((cell) => (
+              <th
+                key={cell.slotIndex}
+                className="border border-border px-1 py-1 text-center font-semibold align-bottom"
+              >
+                <div>{cell.slotIndex}</div>
+                <div className="text-[10px] font-normal text-foreground/60">
+                  {cell.paceNumber ?? ""}
+                </div>
+              </th>
+            ))}
+            <th className="border border-border px-2 py-1 text-center align-bottom">
+              Avg
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td className="border border-border px-2 py-2 text-[10px] text-foreground/60">
+              Remaining {remaining}
             </td>
-            <td className={`px-2 py-1.5 ${scoreTone(cell.score, cell.letter)}`}>
-              {cell.score ?? ""}
-            </td>
-            <td className="px-2 py-1.5 text-foreground/70">
-              {formatReportDate(cell.date)}
+            {cells.map((cell) => (
+              <td
+                key={cell.slotIndex}
+                className={`border border-border px-1 py-2 text-center ${scoreTone(cell.score, cell.letter)}`}
+              >
+                {cell.score ?? ""}
+              </td>
+            ))}
+            <td className="border border-border px-2 py-2 text-center font-semibold">
+              {formatAvg(average)}
             </td>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -49,9 +73,6 @@ export default function PortalSupervisorReport() {
     return <p className="text-foreground/60">Select a student above to view the supervisor report.</p>;
   }
 
-  const overall =
-    report.overall != null ? `${report.overall.toFixed(1)}%` : "—";
-
   return (
     <ReportChrome
       title="Supervisor Progress Report"
@@ -60,17 +81,13 @@ export default function PortalSupervisorReport() {
       onSchoolYear={report.setSchoolYear}
       stats={[
         { label: "PACEs Completed", value: String(report.completed) },
-        { label: "Overall Average", value: overall },
+        { label: "Remaining", value: String(report.remaining) },
+        {
+          label: "Overall Average",
+          value: report.overall != null ? `${report.overall.toFixed(1)}%` : "n/a",
+        },
       ]}
     >
-      <div className="flex flex-wrap gap-3 text-xs">
-        {REPORT_LEGEND.map(([letter, label]) => (
-          <span key={letter} className="border border-border px-2 py-1 rounded">
-            <strong>{letter}</strong> {label}
-          </span>
-        ))}
-      </div>
-
       {report.loading ? (
         <p className="text-foreground/60">Loading logged courses...</p>
       ) : report.grids.length === 0 ? (
@@ -79,26 +96,15 @@ export default function PortalSupervisorReport() {
           12 PACE boxes on the family record.
         </p>
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-4 print:space-y-3">
           {report.grids.map((grid) => (
-            <section
+            <SubjectGridTable
               key={grid.subjectId}
-              className="border border-primary/30 rounded-md overflow-hidden"
-            >
-              <div className="bg-secondary/70 px-3 py-2 flex items-baseline justify-between gap-3">
-                <h3 className="font-semibold">{grid.subjectName}</h3>
-                <p className="text-xs text-foreground/60">
-                  Subject avg{" "}
-                  {grid.average != null ? `${grid.average.toFixed(1)}%` : "—"}
-                </p>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 print:grid-cols-2">
-                <PaceColumn cells={grid.cells.slice(0, 6)} />
-                <div className="md:border-l print:border-l border-border/70">
-                  <PaceColumn cells={grid.cells.slice(6, 12)} />
-                </div>
-              </div>
-            </section>
+              subjectName={grid.subjectName}
+              cells={grid.cells}
+              average={grid.average}
+              remaining={grid.remaining}
+            />
           ))}
         </div>
       )}
