@@ -21,6 +21,14 @@ import {
 } from "@/components/ui/popover";
 import { Star, Camera, Upload, Check, ChevronsUpDown } from "lucide-react";
 import type { PortalContext } from "./PortalLayout";
+import { usePrescribedSubjects } from "@/hooks/useLoggedCourseReport";
+import {
+  compareSubjectNames,
+  currentSchoolYear,
+  subjectDisplayName,
+  toAcePaceNumber,
+  toInternalPaceNumber,
+} from "@/lib/loggedCourses";
 
 interface Subject {
   id: string;
@@ -35,6 +43,8 @@ interface ScoreReport {
   photo_urls: string[] | null;
   entered_into_ace: boolean;
   reported_at: string;
+  review_status?: string | null;
+  admin_note?: string | null;
 }
 
 const emptyForm = {
@@ -50,6 +60,8 @@ export default function PortalProgress() {
 
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [scores, setScores] = useState<ScoreReport[]>([]);
+  const schoolYear = currentSchoolYear();
+  const prescribed = usePrescribedSubjects(selectedStudent?.id, schoolYear);
   const [loading, setLoading] = useState(true);
 
   const [showForm, setShowForm] = useState(false);
@@ -71,13 +83,24 @@ export default function PortalProgress() {
       supabase
         .from("score_reports")
         .select(
-          "id, subject_id, pace_number, score, photo_urls, entered_into_ace, reported_at",
+          "id, subject_id, pace_number, score, photo_urls, entered_into_ace, reported_at, review_status, admin_note",
         )
         .eq("student_id", selectedStudent.id)
         .order("pace_number"),
     ]);
     if (subjectsRes.data) setSubjects(subjectsRes.data);
-    if (scoresRes.data) setScores(scoresRes.data as ScoreReport[]);
+    if (scoresRes.error) {
+      const fallback = await supabase
+        .from("score_reports")
+        .select(
+          "id, subject_id, pace_number, score, photo_urls, entered_into_ace, reported_at",
+        )
+        .eq("student_id", selectedStudent.id)
+        .order("pace_number");
+      if (fallback.data) setScores(fallback.data as ScoreReport[]);
+    } else if (scoresRes.data) {
+      setScores(scoresRes.data as ScoreReport[]);
+    }
     setLoading(false);
   };
 
@@ -119,7 +142,19 @@ export default function PortalProgress() {
       );
       return;
     }
-    const paceNumber = parseInt(form.pace_number, 10);
+    const paceNumber = toInternalPaceNumber(parseInt(form.pace_number, 10));
+    const allowed = prescribed.rows.some(
+      (row) =>
+        row.subjectId === form.subject_id &&
+        row.paceNumber === paceNumber &&
+        row.status !== "passed" &&
+        row.status !== "failed" &&
+        row.score == null,
+    );
+    if (!allowed) {
+      setFormError("That PACE is not prescribed. Contact MCA.");
+      return;
+    }
     const scoreNum = parseFloat(form.score);
     if (
       isNaN(paceNumber) ||
@@ -230,13 +265,21 @@ export default function PortalProgress() {
             and awaiting review.
           </p>
         </div>
-        <Button onClick={() => setShowForm((v) => !v)}>
-          <Upload className="h-4 w-4 mr-1.5" />
-          {showForm ? "Cancel" : "Upload a Test Score"}
-        </Button>
+        {prescribed.subjects.length > 0 && (
+          <Button onClick={() => setShowForm((v) => !v)}>
+            <Upload className="h-4 w-4 mr-1.5" />
+            {showForm ? "Cancel" : "Upload a Test Score"}
+          </Button>
+        )}
       </div>
 
-      {showForm && (
+      {prescribed.subjects.length === 0 && !prescribed.loading && (
+        <p className="rounded-xl border border-border/50 bg-secondary/30 p-5 text-sm text-foreground/70">
+          Contact MCA. Scores can be uploaded only for PACEs prescribed for this student.
+        </p>
+      )}
+
+      {showForm && prescribed.subjects.length > 0 && (
         <form
           onSubmit={handleFormSubmit}
           className="rounded-xl border border-border/50 bg-secondary/30 p-5 space-y-4"
@@ -262,7 +305,10 @@ export default function PortalProgress() {
                     className="w-full justify-between bg-background font-normal"
                   >
                     {form.subject_id
-                      ? subjects.find((s) => s.id === form.subject_id)?.name
+                      ? subjectDisplayName(
+                          prescribed.subjects.find((s) => s.id === form.subject_id)?.name ??
+                            "Select a subject",
+                        )
                       : "Select a subject"}
                     <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                   </Button>
@@ -271,14 +317,14 @@ export default function PortalProgress() {
                   <Command>
                     <CommandInput placeholder="Search subjects..." />
                     <CommandList>
-                      <CommandEmpty>No subject found.</CommandEmpty>
+                      <CommandEmpty>No prescribed subject found.</CommandEmpty>
                       <CommandGroup>
-                        {subjects.map((s) => (
+                        {prescribed.subjects.map((s) => (
                           <CommandItem
                             key={s.id}
-                            value={s.name}
+                            value={subjectDisplayName(s.name)}
                             onSelect={() => {
-                              setForm((f) => ({ ...f, subject_id: s.id }));
+                              setForm((f) => ({ ...f, subject_id: s.id, pace_number: "" }));
                               setSubjectPopoverOpen(false);
                             }}
                           >
@@ -290,7 +336,7 @@ export default function PortalProgress() {
                                   : "opacity-0",
                               )}
                             />
-                            {s.name}
+                            {subjectDisplayName(s.name)}
                           </CommandItem>
                         ))}
                       </CommandGroup>
@@ -301,14 +347,29 @@ export default function PortalProgress() {
             </div>
             <div className="space-y-1.5">
               <Label>PACE Number</Label>
-              <Input
-                type="number"
+              <select
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                 value={form.pace_number}
                 onChange={(e) =>
                   setForm((f) => ({ ...f, pace_number: e.target.value }))
                 }
-                className="bg-background"
-              />
+              >
+                <option value="">Select a prescribed PACE</option>
+                {prescribed.rows
+                  .filter(
+                    (row) =>
+                      row.subjectId === form.subject_id &&
+                      row.status !== "passed" &&
+                      row.status !== "failed" &&
+                      row.score == null,
+                  )
+                  .sort((a, b) => a.paceNumber - b.paceNumber)
+                  .map((row) => (
+                    <option key={row.id} value={String(row.paceNumber)}>
+                      {toAcePaceNumber(row.paceNumber)}
+                    </option>
+                  ))}
+              </select>
             </div>
             <div className="space-y-1.5">
               <Label>Date of Test</Label>
@@ -363,7 +424,14 @@ export default function PortalProgress() {
         </p>
       ) : (
         <div className="space-y-6">
-          {Array.from(scoresBySubject.entries()).map(
+          {Array.from(scoresBySubject.entries())
+            .sort((a, b) =>
+              compareSubjectNames(
+                subjects.find((s) => s.id === a[0])?.name ?? "",
+                subjects.find((s) => s.id === b[0])?.name ?? "",
+              ),
+            )
+            .map(
             ([subjectId, subjectScores]) => {
               const subject = subjects.find((s) => s.id === subjectId);
               const avg = subjectAverage(subjectScores);
@@ -374,7 +442,7 @@ export default function PortalProgress() {
                 >
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="font-semibold text-foreground">
-                      {subject?.name ?? "Unknown Subject"}
+                      {subjectDisplayName(subject?.name ?? "Unknown Subject")}
                     </h3>
                     <div className="text-sm text-foreground/70">
                       <span className="mr-4">
@@ -388,26 +456,43 @@ export default function PortalProgress() {
                   </div>
                   <div className="flex flex-wrap gap-3">
                     {subjectScores
-                      .sort((a, b) => a.pace_number - b.pace_number)
-                      .map((s) => (
+                      .sort(
+                        (a, b) =>
+                          toInternalPaceNumber(a.pace_number) -
+                          toInternalPaceNumber(b.pace_number),
+                      )
+                      .map((s) => {
+                        const ace = toAcePaceNumber(s.pace_number);
+                        const verified =
+                          s.review_status === "approved" || s.entered_into_ace;
+                        const rejected = s.review_status === "rejected";
+                        const statusText = rejected
+                          ? "Needs attention"
+                          : verified
+                            ? "Verified by MCA"
+                            : "Pending review";
+                        return (
                         <button
                           key={s.id}
                           onClick={() => toggleExpand(s)}
-                          title={`PACE ${s.pace_number}: ${s.score}% — ${new Date(s.reported_at).toLocaleDateString()} — ${s.entered_into_ace ? "Verified by MCA" : "Self-reported, not yet verified"}`}
+                          title={`PACE ${ace}: ${s.score}% — ${new Date(s.reported_at).toLocaleDateString()} — ${statusText}`}
                           className="flex flex-col items-center gap-1 group"
                         >
                           <Star
                             className={`h-7 w-7 transition-colors ${
-                              s.entered_into_ace
+                              verified
                                 ? "fill-amber-400 text-amber-500"
-                                : "fill-transparent text-foreground/30 group-hover:text-foreground/50"
+                                : rejected
+                                  ? "fill-transparent text-destructive"
+                                  : "fill-transparent text-foreground/30 group-hover:text-foreground/50"
                             }`}
                           />
                           <span className="text-xs text-foreground/60">
-                            {s.pace_number}
+                            {ace}
                           </span>
                         </button>
-                      ))}
+                        );
+                      })}
                   </div>
 
                   {subjectScores.map((s) =>
@@ -417,19 +502,26 @@ export default function PortalProgress() {
                         className="mt-4 rounded-lg border border-border/50 bg-secondary/30 p-4 text-sm space-y-2"
                       >
                         <p>
-                          <strong>PACE {s.pace_number}</strong> — {s.score}% on{" "}
+                          <strong>PACE {toAcePaceNumber(s.pace_number)}</strong> — {s.score}% on{" "}
                           {new Date(s.reported_at).toLocaleDateString()}
                         </p>
                         <p
                           className={
-                            s.entered_into_ace
-                              ? "text-amber-600"
-                              : "text-foreground/60"
+                            s.review_status === "rejected"
+                              ? "text-destructive"
+                              : s.review_status === "approved" || s.entered_into_ace
+                                ? "text-amber-600"
+                                : "text-foreground/60"
                           }
                         >
-                          {s.entered_into_ace
-                            ? "Verified by MCA staff"
-                            : "Self-reported — awaiting review by MCA staff"}
+                          {s.review_status === "rejected"
+                            ? "Needs attention"
+                            : s.review_status === "approved" || s.entered_into_ace
+                              ? "Verified"
+                              : "Pending review"}
+                          {s.review_status === "rejected" && s.admin_note
+                            ? ` — ${s.admin_note}`
+                            : ""}
                         </p>
                         {s.photo_urls && s.photo_urls.length > 0 && (
                           <div>

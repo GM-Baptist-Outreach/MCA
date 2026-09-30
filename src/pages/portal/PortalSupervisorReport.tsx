@@ -2,6 +2,7 @@ import { useOutletContext } from "react-router-dom";
 import type { PortalContext } from "./PortalLayout";
 import { useLoggedCourseReport, type ReportCell } from "@/hooks/useLoggedCourseReport";
 import { ReportChrome, scoreTone } from "./ReportChrome";
+import { subjectDisplayName, toAcePaceNumber } from "@/lib/loggedCourses";
 
 function formatAvg(value: number | null): string {
   return value != null ? value.toFixed(1) : "n/a";
@@ -24,7 +25,7 @@ function SubjectGridTable({
         <thead>
           <tr>
             <th className="border border-border px-2 py-1 text-left align-bottom min-w-28">
-              {subjectName}
+              {subjectDisplayName(subjectName)}
             </th>
             {cells.map((cell) => (
               <th
@@ -33,7 +34,7 @@ function SubjectGridTable({
               >
                 <div>{cell.slotIndex}</div>
                 <div className="text-[10px] font-normal text-foreground/60">
-                  {cell.paceNumber ?? ""}
+                  {cell.paceNumber != null ? toAcePaceNumber(cell.paceNumber) : ""}
                 </div>
               </th>
             ))}

@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Printer } from "lucide-react";
+import { compareSubjectNames, toAcePaceNumber } from "@/lib/loggedCourses";
 
 const SUPABASE_URL = "https://proiyioqfbjcmprsnqhf.supabase.co";
 
@@ -21,6 +23,10 @@ interface PickList {
     quantity_on_hand: number | null;
     backordered: boolean | null;
     subjects: { name: string } | { name: string }[] | null;
+    items: { original_name: string } | { original_name: string }[] | null;
+  }>;
+  resource_book_notices?: Array<{
+    notified_at: string | null;
     items: { original_name: string } | { original_name: string }[] | null;
   }>;
 }
@@ -46,7 +52,7 @@ export default function AdminPickLists() {
     const { data, error } = await supabase
       .from("pick_lists")
       .select(
-        "id, school_year, ship_date, status, paused_for_missing_scores, notes, reminder_email_sent_at, students(student_name), pick_list_items(id, pace_number, quantity_on_hand, backordered, subjects(name), items(original_name))",
+        "id, school_year, ship_date, status, paused_for_missing_scores, notes, reminder_email_sent_at, students(student_name), pick_list_items(id, pace_number, quantity_on_hand, backordered, subjects(name), items(original_name)), resource_book_notices(notified_at, items(original_name))",
       )
       .order("ship_date", { ascending: false })
       .limit(100);
@@ -173,12 +179,26 @@ export default function AdminPickLists() {
                     Reminder emailed {new Date(list.reminder_email_sent_at).toLocaleString()}
                   </p>
                 )}
+                {(list.resource_book_notices ?? []).length > 0 && (
+                  <p className="text-sm text-foreground/70">
+                    Notified parent:{" "}
+                    {(list.resource_book_notices ?? [])
+                      .map((notice) => relText(notice.items, "original_name"))
+                      .filter(Boolean)
+                      .join(", ")}
+                  </p>
+                )}
                 <ul className="text-sm text-foreground/80 columns-2 print:columns-1">
-                  {list.pick_list_items.map((item) => {
+                  {[...list.pick_list_items]
+                    .sort((a, b) =>
+                      compareSubjectNames(relText(a.subjects, "name"), relText(b.subjects, "name")) ||
+                      a.pace_number - b.pace_number,
+                    )
+                    .map((item) => {
                     const itemName = relText(item.items, "original_name");
                     return (
                       <li key={item.id} className="break-inside-avoid">
-                        {relText(item.subjects, "name") || "Subject"} {item.pace_number}
+                        {relText(item.subjects, "name") || "Subject"} {toAcePaceNumber(item.pace_number)}
                         {itemName ? ` · ${itemName}` : ""}
                         {item.quantity_on_hand != null ? ` · on hand ${item.quantity_on_hand}` : ""}
                         {item.backordered ? (
@@ -193,6 +213,151 @@ export default function AdminPickLists() {
               </div>
             );
           })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface BackorderRow {
+  source: "pick_list" | "order";
+  line_id: string;
+  customer_name: string | null;
+  item_name: string | null;
+  quantity: number;
+  ordered_at: string;
+  backorder_fulfilled_at: string | null;
+  backordered: boolean;
+}
+
+export function AdminBackorders() {
+  const { toast } = useToast();
+  const [rows, setRows] = useState<BackorderRow[]>([]);
+  const [filter, setFilter] = useState<"open" | "fulfilled" | "all">("open");
+  const [loading, setLoading] = useState(true);
+  const [draftDate, setDraftDate] = useState<Record<string, string>>({});
+
+  const load = async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from("admin_backordered_items_v")
+      .select("source, line_id, customer_name, item_name, quantity, ordered_at, backorder_fulfilled_at, backordered")
+      .order("ordered_at", { ascending: false });
+    if (error) {
+      toast({ title: "Couldn't load backorders", description: error.message, variant: "destructive" });
+      setRows([]);
+    } else {
+      setRows((data ?? []) as BackorderRow[]);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const visible = rows.filter((row) => {
+    if (filter === "open") return !row.backorder_fulfilled_at;
+    if (filter === "fulfilled") return !!row.backorder_fulfilled_at;
+    return true;
+  });
+
+  const saveFulfilled = async (row: BackorderRow, fulfilledAt: string | null) => {
+    const table = row.source === "pick_list" ? "pick_list_items" : "order_items";
+    const { data: userData } = await supabase.auth.getUser();
+    const { error } = await supabase
+      .from(table)
+      .update({
+        backorder_fulfilled_at: fulfilledAt,
+        backorder_fulfilled_by: fulfilledAt ? userData.user?.id ?? null : null,
+      })
+      .eq("id", row.line_id);
+    if (error) {
+      toast({ title: "Couldn't update the line", description: error.message, variant: "destructive" });
+      return;
+    }
+    load();
+  };
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-2xl font-bold font-serif text-primary">Backordered Items</h2>
+        <p className="text-sm text-foreground/60">
+          Pick-list lines and store lines that were short when they were ordered.
+        </p>
+      </div>
+      <div className="flex gap-2">
+        {(["open", "fulfilled", "all"] as const).map((value) => (
+          <Button
+            key={value}
+            type="button"
+            size="sm"
+            variant={filter === value ? "default" : "outline"}
+            onClick={() => setFilter(value)}
+          >
+            {value[0].toUpperCase() + value.slice(1)}
+          </Button>
+        ))}
+      </div>
+      {loading ? (
+        <p className="text-foreground/60">Loading...</p>
+      ) : visible.length === 0 ? (
+        <p className="text-sm text-foreground/60">No backordered items in this view.</p>
+      ) : (
+        <div className="overflow-x-auto rounded-xl border">
+          <table className="w-full text-sm">
+            <thead className="bg-secondary text-left">
+              <tr>
+                <th className="p-3">Customer Name</th>
+                <th className="p-3">Item</th>
+                <th className="p-3">Quantity</th>
+                <th className="p-3">Date Ordered</th>
+                <th className="p-3">Date Fulfilled</th>
+                <th className="p-3"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((row) => {
+                const key = `${row.source}:${row.line_id}`;
+                const fulfilled = (draftDate[key] ?? row.backorder_fulfilled_at ?? "").slice(0, 10);
+                return (
+                  <tr key={key} className="border-t">
+                    <td className="p-3">{row.customer_name}</td>
+                    <td className="p-3">{row.item_name}</td>
+                    <td className="p-3">{row.quantity}</td>
+                    <td className="p-3">{new Date(row.ordered_at).toLocaleDateString()}</td>
+                    <td className="p-3">
+                      <Input
+                        type="date"
+                        className="h-8 w-40"
+                        value={fulfilled}
+                        onChange={(event) =>
+                          setDraftDate((prev) => ({ ...prev, [key]: event.target.value }))
+                        }
+                      />
+                    </td>
+                    <td className="p-3 space-x-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() =>
+                          saveFulfilled(row, (draftDate[key] || new Date().toISOString().slice(0, 10)) + "T00:00:00Z")
+                        }
+                      >
+                        Mark fulfilled
+                      </Button>
+                      {row.backorder_fulfilled_at && (
+                        <Button type="button" size="sm" variant="outline" onClick={() => saveFulfilled(row, null)}>
+                          Undo
+                        </Button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       )}
     </div>

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "@/lib/supabaseClient";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -62,6 +62,58 @@ const STATUS_LABELS: Record<string, string> = {
   fulfilled: "Fulfilled",
   cancelled: "Cancelled",
 };
+
+function BooksNeededCard({ studentId }: { studentId: string }) {
+  const [books, setBooks] = useState<Array<{ id: string; name: string; price: number | null }>>([]);
+
+  useEffect(() => {
+    let ignore = false;
+    supabase
+      .from("resource_book_notices")
+      .select("id, item_id, purchased_order_id, items(original_name, sales_price)")
+      .eq("student_id", studentId)
+      .is("purchased_order_id", null)
+      .then(({ data }) => {
+        if (ignore) return;
+        setBooks(
+          (data ?? []).map((row) => {
+            const item = row.items as
+              | { original_name: string; sales_price: number }
+              | { original_name: string; sales_price: number }[]
+              | null;
+            const record = Array.isArray(item) ? item[0] : item;
+            return {
+              id: row.item_id,
+              name: record?.original_name ?? "Book",
+              price: record?.sales_price ?? null,
+            };
+          }),
+        );
+      });
+    return () => {
+      ignore = true;
+    };
+  }, [studentId]);
+
+  if (books.length === 0) return null;
+  const href = `/store?add=${books.map((book) => book.id).join(",")}`;
+  return (
+    <div className="rounded-xl border border-border/50 bg-secondary/30 p-5 space-y-2">
+      <h3 className="font-semibold text-foreground">Books needed</h3>
+      <ul className="text-sm text-foreground/80 space-y-1">
+        {books.map((book) => (
+          <li key={book.id}>
+            {book.name}
+            {book.price != null ? ` – $${Number(book.price).toFixed(2)}` : ""}
+          </li>
+        ))}
+      </ul>
+      <Button asChild>
+        <Link to={href}>Buy in the MCA store</Link>
+      </Button>
+    </div>
+  );
+}
 
 const PortalHome = () => {
   const { family, students, selectedStudent } =
@@ -178,6 +230,8 @@ const PortalHome = () => {
         </h2>
         <p className="text-sm text-foreground/60">{family.email}</p>
       </div>
+
+      {selectedStudent && <BooksNeededCard studentId={selectedStudent.id} />}
 
       {selectedStudent && (
         <div className="rounded-xl border border-border/50 bg-secondary/30 p-5">

@@ -4,6 +4,7 @@ import Stripe from "npm:stripe@17.4.0";
 import { readPaymentMode, webhookVerificationCandidates } from "../_shared/paymentMode.ts";
 import { readEdgePaymentEnv } from "../_shared/readEdgeEnv.ts";
 import { isStoreShippingLine } from "../_shared/storeShipping.ts";
+import { PORTAL_LOGIN_URL, renderTemplate, sendResendEmail } from "../_shared/emailTemplates.ts";
 
 // Stripe calls this directly (signature-verified, not a Supabase JWT).
 // checkout.session.completed is where families/students/enrollments rows
@@ -173,23 +174,7 @@ Deno.serve(async (req: Request) => {
       console.error("Skipping email send — no RESEND_API_KEY or no recipient", to);
       return;
     }
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${resendApiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: "Midwest Christian Academy <admin@mcahomeschool.com>",
-        reply_to: "david@midwestchristianacademy.com",
-        to: [to],
-        subject,
-        html,
-      }),
-    });
-    if (!res.ok) {
-      console.error("Resend send failed", res.status, await res.text());
-    }
+    await sendResendEmail({ to, subject, html });
   }
 
   async function ghlFetch(path: string, body: unknown) {
@@ -348,17 +333,21 @@ Deno.serve(async (req: Request) => {
           }
 
           if (family?.email) {
-            await sendEmail(
-              family.email,
-              `Payment is now set up for ${student?.student_name ?? "your student"}`,
-              `
-                <div style="font-family: Georgia, serif; color: #1a1a2e; max-width: 600px;">
+            const paymentEmail = await renderTemplate(admin, "payment_setup_confirmed", {
+              student_name: student?.student_name ?? "your student",
+              frequency,
+              price: plan?.price != null ? String(plan.price) : "",
+              price_suffix: plan?.price != null ? ` ($${plan.price})` : "",
+              portal_url: PORTAL_LOGIN_URL,
+            }, {
+              subject: "Payment is now set up for {{student_name}}",
+              html: `<div style="font-family: Georgia, serif; color: #1a1a2e; max-width: 600px;">
                   <h2>Payment Set Up</h2>
-                  <p>Thanks! ${student?.student_name ?? "Your student"}'s enrollment is now on a paid ${frequency} plan${plan?.price != null ? ` ($${plan.price})` : ""}. Nothing else changes — same student record, same Parent Portal access.</p>
+                  <p>Thanks! {{student_name}}'s enrollment is now on a paid {{frequency}} plan{{price_suffix}}. Nothing else changes — same student record, same Parent Portal access.</p>
                   <p>If you have any questions, reach out to david@midwestchristianacademy.com or call (844) 663-4477.</p>
-                </div>
-              `
-            );
+                </div>`,
+            });
+            await sendEmail(family.email, paymentEmail.subject, paymentEmail.html);
           }
 
           break;
@@ -439,11 +428,71 @@ Deno.serve(async (req: Request) => {
 
           if (orderError) throw orderError;
 
-          if (orderItemsToInsert.length > 0) {
+          const { data: locationRow } = await admin
+            .from("locations")
+            .select("id")
+            .eq("active", true)
+            .order("created_at", { ascending: true })
+            .limit(1)
+            .maybeSingle();
+
+          const orderItemRows: Array<{
+            order_id: string;
+            item_id: string;
+            quantity: number;
+            unit_price_at_order: number;
+            backordered: boolean;
+          }> = [];
+          for (const oi of orderItemsToInsert) {
+            let backordered = false;
+            if (locationRow) {
+              const { data: levelRow } = await admin
+                .from("inventory_levels")
+                .select("id, quantity_on_hand")
+                .eq("item_id", oi.item_id)
+                .eq("location_id", locationRow.id)
+                .maybeSingle();
+              if (levelRow) {
+                backordered = Number(levelRow.quantity_on_hand) < oi.quantity;
+                await admin
+                  .from("inventory_levels")
+                  .update({
+                    quantity_on_hand: levelRow.quantity_on_hand - oi.quantity,
+                    updated_at: new Date().toISOString(),
+                  })
+                  .eq("id", levelRow.id);
+              }
+            }
+            orderItemRows.push({ ...oi, order_id: order.id, backordered });
+          }
+
+          if (orderItemRows.length > 0) {
             const { error: orderItemsError } = await admin
               .from("order_items")
-              .insert(orderItemsToInsert.map((oi) => ({ ...oi, order_id: order.id })));
+              .insert(orderItemRows);
             if (orderItemsError) throw orderItemsError;
+            if (metadata.customer_email) {
+              const { data: familyRows } = await admin
+                .from("families")
+                .select("id")
+                .ilike("email", metadata.customer_email);
+              const familyIds = (familyRows ?? []).map((row) => row.id as string);
+              if (familyIds.length > 0) {
+                const { data: studentRows } = await admin
+                  .from("students")
+                  .select("id")
+                  .in("family_id", familyIds);
+                const studentIds = (studentRows ?? []).map((row) => row.id as string);
+                if (studentIds.length > 0) {
+                  await admin
+                    .from("resource_book_notices")
+                    .update({ purchased_order_id: order.id })
+                    .in("student_id", studentIds)
+                    .in("item_id", orderItemRows.map((row) => row.item_id))
+                    .is("purchased_order_id", null);
+                }
+              }
+            }
           }
 
           if (shippingFeeAmount != null) {
@@ -462,61 +511,28 @@ Deno.serve(async (req: Request) => {
             }
           }
 
-          // Best-effort inventory decrement. Only items David has actually
-          // started tracking (an inventory_levels row exists for them) get
-          // touched — everything else stays untracked, per "up to them to
-          // decide what to track." Allowed to go negative on purpose: a
-          // negative quantity_on_hand IS the "how many we're short" signal
-          // for reordering, not an error state.
-          const { data: locationRow } = await admin
-            .from("locations")
-            .select("id")
-            .eq("active", true)
-            .order("created_at", { ascending: true })
-            .limit(1)
-            .maybeSingle();
-
-          if (locationRow && orderItemsToInsert.length > 0) {
-            for (const oi of orderItemsToInsert) {
-              const { data: levelRow } = await admin
-                .from("inventory_levels")
-                .select("id, quantity_on_hand")
-                .eq("item_id", oi.item_id)
-                .eq("location_id", locationRow.id)
-                .maybeSingle();
-
-              if (levelRow) {
-                await admin
-                  .from("inventory_levels")
-                  .update({
-                    quantity_on_hand: levelRow.quantity_on_hand - oi.quantity,
-                    updated_at: new Date().toISOString(),
-                  })
-                  .eq("id", levelRow.id);
-              }
-            }
-          }
-
-          const itemsHtml = emailLineItems
+          const itemsHtml = `<ul>${emailLineItems
             .map((li) => `<li>${escapeHtml(li.name)} × ${li.quantity}</li>`)
-            .join("");
+            .join("")}</ul>`;
           const fulfillmentLine = addressFull
-            ? `Shipping to: ${escapeHtml(addressFull)}`
+            ? `Shipping to: ${addressFull}`
             : "Local pickup";
-          await sendEmail(
-            metadata.customer_email,
-            "Your Midwest Christian Academy order is confirmed",
-            `
-              <div style="font-family: Georgia, serif; color: #1a1a2e; max-width: 600px;">
+          const orderEmail = await renderTemplate(admin, "store_order_confirmed", {
+            order_items: itemsHtml,
+            fulfillment_line: fulfillmentLine,
+            order_total: ((session.amount_total ?? 0) / 100).toFixed(2),
+          }, {
+            subject: "Your Midwest Christian Academy order is confirmed",
+            html: `<div style="font-family: Georgia, serif; color: #1a1a2e; max-width: 600px;">
                 <h2>Order Confirmed</h2>
                 <p>Thank you for your order! Here's a summary:</p>
-                <ul>${itemsHtml}</ul>
-                <p>${fulfillmentLine}</p>
-                <p><strong>Total: $${((session.amount_total ?? 0) / 100).toFixed(2)}</strong></p>
+                {{order_items}}
+                <p>{{fulfillment_line}}</p>
+                <p><strong>Total: ${"$"}{{order_total}}</strong></p>
                 <p>We'll get this prepared and reach out with any questions. Call us at (844) 663-4477 if you need anything.</p>
-              </div>
-            `
-          );
+              </div>`,
+          });
+          await sendEmail(metadata.customer_email, orderEmail.subject, orderEmail.html);
 
           break;
         }
@@ -713,21 +729,26 @@ Deno.serve(async (req: Request) => {
           });
         }
 
-        const summaryHtml = emailEnrollmentSummary
+        const summaryHtml = `<ul>${emailEnrollmentSummary
           .map((s) => `<li>${escapeHtml(s.studentName)} — ${escapeHtml(s.tier)}${s.price != null ? ` ($${s.price}/${metadata.payment_plan})` : ""}</li>`)
-          .join("");
-        await sendEmail(
-          metadata.parent_email,
-          isReturningFamily ? "Your new enrollment with Midwest Christian Academy is confirmed" : "Welcome to Midwest Christian Academy!",
-          `
-            <div style="font-family: Georgia, serif; color: #1a1a2e; max-width: 600px;">
+          .join("")}</ul>`;
+        const welcomeKey = isReturningFamily ? "enrollment_added_paid" : "welcome_paid";
+        const welcomeEmail = await renderTemplate(admin, welcomeKey, {
+          student_list: summaryHtml,
+          portal_url: PORTAL_LOGIN_URL,
+        }, {
+          subject: isReturningFamily
+            ? "Your new enrollment with Midwest Christian Academy is confirmed"
+            : "Welcome to Midwest Christian Academy!",
+          html: `<div style="font-family: Georgia, serif; color: #1a1a2e; max-width: 600px;">
               <h2>${isReturningFamily ? "Enrollment Added" : "Enrollment Confirmed"}</h2>
               <p>Thank you for enrolling with Midwest Christian Academy. Here's a summary:</p>
-              <ul>${summaryHtml}</ul>
+              {{student_list}}
+              <p>Sign in to the Parent Portal any time: <a href="{{portal_url}}">{{portal_url}}</a></p>
               <p>If you have any questions, reach out to david@midwestchristianacademy.com or call (844) 663-4477.</p>
-            </div>
-          `
-        );
+            </div>`,
+        });
+        await sendEmail(metadata.parent_email, welcomeEmail.subject, welcomeEmail.html);
 
         break;
       }

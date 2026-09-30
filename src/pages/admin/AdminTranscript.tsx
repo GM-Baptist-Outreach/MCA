@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ArrowLeft, Printer } from "lucide-react";
+import { compareSubjectNames, subjectDisplayName } from "@/lib/loggedCourses";
 
 interface Student {
   id: string;
@@ -87,6 +88,7 @@ export default function AdminTranscript() {
     for (const c of completions) {
       const list = map.get(c.school_year) ?? [];
       list.push(c);
+      list.sort((a, b) => compareSubjectNames(a.subject_name, b.subject_name));
       map.set(c.school_year, list);
     }
     return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
@@ -144,7 +146,7 @@ export default function AdminTranscript() {
           .map(
             (c) => `
             <tr>
-              <td>${escapeHtml(c.subject_name)}</td>
+              <td>${escapeHtml(subjectDisplayName(c.subject_name))}</td>
               <td>${c.final_average ?? "—"}</td>
               <td>${c.letter_grade ?? "—"}</td>
               <td>${c.credit_earned.toFixed(2)}</td>
@@ -315,7 +317,7 @@ export default function AdminTranscript() {
                   <tbody>
                     {yearCompletions.map((c) => (
                       <tr key={c.id} className="border-t border-border/50">
-                        <td className="p-2">{c.subject_name}</td>
+                        <td className="p-2">{subjectDisplayName(c.subject_name)}</td>
                         <td className="p-2">{c.final_average ?? "—"}</td>
                         <td className="p-2">{c.letter_grade ?? "—"}</td>
                         <td className="p-2">{c.credit_earned.toFixed(2)}</td>

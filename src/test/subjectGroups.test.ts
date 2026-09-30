@@ -1,12 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildCourseOptions,
+  compareSubjectNames,
   ELECTIVE_EXCLUSIONS,
   isExcludedStoreCategory,
   matchingPickListCompanions,
+  matchingResourceBooks,
   quarterForCompletedAt,
+  quarterForDate,
+  quarterRanges,
   REPORT_QUARTERS,
+  subjectDisplayName,
   subjectGroup,
   SUBJECT_GROUPS,
+  toAcePaceNumber,
+  toInternalPaceNumber,
   trackedStock,
 } from "@/lib/loggedCourses";
 
@@ -15,9 +23,9 @@ describe("subject groups", () => {
     expect([...SUBJECT_GROUPS]).toEqual([
       "Math",
       "English",
-      "Social Studies",
-      "Science",
       "Word Building",
+      "Science",
+      "Social Studies",
       "Electives",
     ]);
   });
@@ -75,27 +83,43 @@ describe("subject groups", () => {
 });
 
 describe("report card quarters", () => {
-  it("keeps Q1 Aug-Oct, Q2 Nov-Dec, Q3 Jan-Mar, Q4 Apr-Jul", () => {
+  it("uses calendar quarters only until a start date is set", () => {
     expect(REPORT_QUARTERS.map((quarter) => [quarter.key, ...quarter.months])).toEqual([
-      ["Q1", 8, 9, 10],
-      ["Q2", 11, 12],
+      ["Q1", 7, 8, 9],
+      ["Q2", 10, 11, 12],
       ["Q3", 1, 2, 3],
-      ["Q4", 4, 5, 6, 7],
+      ["Q4", 4, 5, 6],
     ]);
   });
 
-  it("places 2026-27 dates from August 2026 through July 2027", () => {
-    expect(quarterForCompletedAt("2026-08-01", "2026-27")).toBe("Q1");
-    expect(quarterForCompletedAt("2026-10-31", "2026-27")).toBe("Q1");
-    expect(quarterForCompletedAt("2026-11-01", "2026-27")).toBe("Q2");
+  it("places 2026-27 dates from July 2026 through June 2027", () => {
+    expect(quarterForCompletedAt("2026-07-01", "2026-27")).toBe("Q1");
+    expect(quarterForCompletedAt("2026-09-30", "2026-27")).toBe("Q1");
+    expect(quarterForCompletedAt("2026-10-01", "2026-27")).toBe("Q2");
     expect(quarterForCompletedAt("2026-12-15", "2026-27")).toBe("Q2");
     expect(quarterForCompletedAt("2027-01-05", "2026-27")).toBe("Q3");
     expect(quarterForCompletedAt("2027-03-31", "2026-27")).toBe("Q3");
     expect(quarterForCompletedAt("2027-04-01", "2026-27")).toBe("Q4");
-    expect(quarterForCompletedAt("2027-07-31", "2026-27")).toBe("Q4");
-    expect(quarterForCompletedAt("2026-07-31", "2026-27")).toBeNull();
-    expect(quarterForCompletedAt("2027-08-01", "2026-27")).toBeNull();
+    expect(quarterForCompletedAt("2027-06-30", "2026-27")).toBe("Q4");
+    expect(quarterForCompletedAt("2026-06-30", "2026-27")).toBeNull();
+    expect(quarterForCompletedAt("2027-07-01", "2026-27")).toBeNull();
     expect(quarterForCompletedAt(null, "2026-27")).toBeNull();
+  });
+
+  it("counts 9 weeks from the start date and folds the edges into Q1 and Q4", () => {
+    const ranges = quarterRanges("2026-08-18");
+    expect(ranges.map((range) => [range.key, range.start, range.end])).toEqual([
+      ["Q1", "2026-08-18", "2026-10-20"],
+      ["Q2", "2026-10-20", "2026-12-22"],
+      ["Q3", "2026-12-22", "2027-02-23"],
+      ["Q4", "2027-02-23", "2027-04-27"],
+    ]);
+    expect(quarterForDate("2026-08-01", "2026-08-18")).toBe("Q1");
+    expect(quarterForDate("2026-08-18", "2026-08-18")).toBe("Q1");
+    expect(quarterForDate("2026-10-19", "2026-08-18")).toBe("Q1");
+    expect(quarterForDate("2026-10-20", "2026-08-18")).toBe("Q2");
+    expect(quarterForDate("2027-04-27", "2026-08-18")).toBe("Q4");
+    expect(quarterForCompletedAt("2026-07-01", "2026-27", "2026-08-18")).toBe("Q1");
   });
 });
 
@@ -115,7 +139,7 @@ describe("pick list companions and stock", () => {
     },
   ];
 
-  it("adds same-subject keys and English-group novels once", () => {
+  it("adds same-subject keys and does not add resource books", () => {
     const matches = matchingPickListCompanions(paces, [
       {
         id: "key-eng-i",
@@ -167,8 +191,142 @@ describe("pick list companions and stock", () => {
       },
     ]);
 
-    expect(matches.map((item) => item.id)).toEqual(["key-eng-i", "novel-english"]);
-    expect(matches.find((item) => item.id === "novel-english")?.pace_number).toBe(101);
+    expect(matches.map((item) => item.id)).toEqual(["key-eng-i"]);
+  });
+
+  it("notifies resource books only when the book subject matches the PACE", () => {
+    const books = matchingResourceBooks(
+      [
+        {
+          subject_id: "eng",
+          subject_name: "English",
+          pace_number: 52,
+        },
+        {
+          subject_id: "lit",
+          subject_name: "Lit & Creative Writing",
+          pace_number: 25,
+        },
+      ],
+      [
+        {
+          id: "heidi",
+          subject_id: "lit",
+          subject_name: "Lit & Creative Writing",
+          item_type: "other",
+          range_start: 25,
+          range_end: 36,
+        },
+        {
+          id: "english-novel",
+          subject_id: "eng",
+          subject_name: "English",
+          item_type: "other",
+          range_start: 49,
+          range_end: 60,
+        },
+      ],
+    );
+    expect(books.map((item) => item.id)).toEqual(["english-novel", "heidi"]);
+  });
+
+  it("shows ACE numbers and sorts subjects in David's order", () => {
+    expect(toInternalPaceNumber(1037)).toBe(37);
+    expect(toInternalPaceNumber(37)).toBe(37);
+    expect(toAcePaceNumber(37)).toBe(1037);
+    expect(subjectDisplayName("Lit & Creative Writing")).toBe(
+      "Literature and Creative Writing",
+    );
+    expect(
+      ["Science", "Word Building", "Spanish", "Math", "English", "Social Studies"].sort(
+        compareSubjectNames,
+      ),
+    ).toEqual([
+      "Math",
+      "English",
+      "Word Building",
+      "Science",
+      "Social Studies",
+      "Spanish",
+    ]);
+    expect(
+      ["OT Survey", "NT Survey", "Bible Reading"].sort(compareSubjectNames).map(subjectDisplayName),
+    ).toEqual([
+      "Bible Reading",
+      "New Testament Survey",
+      "Old Testament Survey",
+    ]);
+  });
+
+  it("sells elementary levels that exist and high school courses by name", () => {
+    const catalog = [
+      ...[1, 12, 13, 24].map((pace, index) => ({
+        id: `math-${pace}`,
+        subject_id: "math",
+        subject_name: "Math",
+        item_type: "pace",
+        pace_number: pace,
+        sales_price: 4,
+      })),
+      {
+        id: "rr",
+        subject_id: "math",
+        subject_name: "Math",
+        item_type: "other",
+        pace_number: 1,
+        sales_price: 2.7,
+      },
+      ...[109, 120].map((pace) => ({
+        id: `eng2-${pace}`,
+        subject_id: "eng2",
+        subject_name: "English II",
+        item_type: "pace",
+        pace_number: pace,
+        sales_price: 5,
+      })),
+      ...[133, 138].map((pace) => ({
+        id: `civ-${pace}`,
+        subject_id: "civ",
+        subject_name: "Civics",
+        item_type: "pace",
+        pace_number: pace,
+        sales_price: 5,
+      })),
+      ...[139, 144].map((pace) => ({
+        id: `eco-${pace}`,
+        subject_id: "eco",
+        subject_name: "Economics",
+        item_type: "pace",
+        pace_number: pace,
+        sales_price: 5,
+      })),
+      {
+        id: "book-1",
+        subject_id: "nut",
+        subject_name: "Nutrition Science",
+        item_type: "other",
+        pace_number: 1,
+        sales_price: 8,
+      },
+    ];
+    const { elementary, courses } = buildCourseOptions(catalog);
+    expect(elementary.map((course) => course.displayName)).toEqual(["Math"]);
+    expect(elementary[0].levels.map((level) => level.level)).toEqual([1, 2]);
+    expect(elementary[0].levels[0].aceStart).toBe(1001);
+    expect(elementary[0].levels[0].aceEnd).toBe(1012);
+    expect(elementary[0].levels[0].items.map((item) => item.id)).toEqual([
+      "math-1",
+      "math-12",
+    ]);
+    const english = courses.find((course) => course.displayName === "English II");
+    expect(english?.kind).toBe("course");
+    expect(english?.paceStart).toBe(109);
+    expect(english?.paceEnd).toBe(120);
+    const civics = courses.find((course) => course.displayName === "Civics and Economics");
+    expect(civics?.subjectIds).toEqual(["civ", "eco"]);
+    expect(civics?.paceStart).toBe(133);
+    expect(civics?.paceEnd).toBe(144);
+    expect(courses.find((course) => course.displayName === "Nutrition Science")?.items).toHaveLength(1);
   });
 
   it("keeps a tracked stock of 0 and does not mark untracked items backordered", () => {

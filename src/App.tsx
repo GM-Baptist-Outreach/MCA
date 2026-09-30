@@ -24,7 +24,8 @@ import AdminCompEnroll from "./pages/admin/AdminCompEnroll";
 import AdminFamilyDetail from "./pages/admin/AdminFamilyDetail";
 import AdminTranscript from "./pages/admin/AdminTranscript";
 import AdminAcademicProjection from "./pages/admin/AdminAcademicProjection";
-import AdminPickLists from "./pages/admin/AdminPickLists";
+import AdminPickLists, { AdminBackorders } from "./pages/admin/AdminPickLists";
+import { AdminTestReviews } from "./pages/admin/AdminFamilyDetail";
 import Store from "./pages/Store";
 import PortalLogin from "./pages/portal/PortalLogin";
 import PortalLayout from "./pages/portal/PortalLayout";
@@ -75,6 +76,9 @@ const App = () => (
             <Route path="enroll-comp" element={<AdminCompEnroll />} />
             <Route path="families/:familyId" element={<AdminFamilyDetail />} />
             <Route path="pick-lists" element={<AdminPickLists />} />
+            <Route path="backorders" element={<AdminBackorders />} />
+            <Route path="test-reviews" element={<AdminTestReviews />} />
+            <Route path="emails" element={<AdminSettings />} />
             <Route
               path="families/:familyId/students/:studentId/transcript"
               element={<AdminTranscript />}

@@ -742,6 +742,8 @@ const AdminFamilyDetail = () => {
         )}
       </div>
 
+      {family && <AdminTestReviews familyId={family.id} embedded />}
+
       <div>
         <h3 className="font-semibold text-foreground mb-3">Store Orders</h3>
         {orders.length === 0 ? (
@@ -770,3 +772,316 @@ const AdminFamilyDetail = () => {
 };
 
 export default AdminFamilyDetail;
+
+interface ReviewRow {
+  id: string;
+  student_id: string;
+  subject_id: string;
+  pace_number: number;
+  score: string | null;
+  photo_urls: string[] | null;
+  entered_into_ace: boolean;
+  reported_at: string;
+  review_status: string;
+  admin_note: string | null;
+  students: {
+    student_name: string;
+    family_id: string;
+    families: { parent_name: string } | { parent_name: string }[] | null;
+  } | null;
+  subjects: { name: string } | { name: string }[] | null;
+}
+
+function reviewName(
+  rel: { name?: string; student_name?: string; parent_name?: string } | Array<{ name?: string; student_name?: string; parent_name?: string }> | null,
+  key: "name" | "student_name" | "parent_name",
+): string {
+  if (!rel) return "";
+  const row = Array.isArray(rel) ? rel[0] : rel;
+  return row?.[key] ?? "";
+}
+
+export function AdminTestReviews({
+  familyId,
+  embedded = false,
+}: {
+  familyId?: string;
+  embedded?: boolean;
+}) {
+  const { toast } = useToast();
+  const [rows, setRows] = useState<ReviewRow[]>([]);
+  const [status, setStatus] = useState("pending");
+  const [familyFilter, setFamilyFilter] = useState(familyId ?? "all");
+  const [loading, setLoading] = useState(true);
+  const [note, setNote] = useState<Record<string, string>>({});
+  const [draftScore, setDraftScore] = useState<Record<string, string>>({});
+  const [draftPace, setDraftPace] = useState<Record<string, string>>({});
+  const [photos, setPhotos] = useState<Record<string, string[]>>({});
+  const [lightbox, setLightbox] = useState<string | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    let query = supabase
+      .from("score_reports")
+      .select(
+        "id, student_id, subject_id, pace_number, score, photo_urls, entered_into_ace, reported_at, review_status, admin_note, students(student_name, family_id, families(parent_name)), subjects(name)",
+      )
+      .order("reported_at", { ascending: false })
+      .limit(200);
+    if (status !== "all") query = query.eq("review_status", status);
+    const { data, error } = await query;
+    if (error) {
+      toast({ title: "Couldn't load test uploads", description: error.message, variant: "destructive" });
+      setRows([]);
+    } else {
+      setRows((data ?? []) as unknown as ReviewRow[]);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    load();
+  }, [status, familyId]);
+
+  const visible = rows.filter((row) => {
+    const rowFamily = row.students?.family_id;
+    const filter = familyId ?? familyFilter;
+    return filter === "all" || rowFamily === filter;
+  });
+
+  const families = new Map<string, string>();
+  for (const row of rows) {
+    if (!row.students?.family_id) continue;
+    families.set(
+      row.students.family_id,
+      reviewName(row.students.families, "parent_name") || "Family",
+    );
+  }
+
+  const openPhotos = async (row: ReviewRow) => {
+    if (!row.photo_urls?.length || photos[row.id]) return;
+    const signed = await Promise.all(
+      row.photo_urls.map(async (path) => {
+        const { data } = await supabase.storage.from("test-score-photos").createSignedUrl(path, 300);
+        return data?.signedUrl ?? null;
+      }),
+    );
+    setPhotos((prev) => ({ ...prev, [row.id]: signed.filter((url): url is string => !!url) }));
+  };
+
+  const review = async (
+    row: ReviewRow,
+    next: "approved" | "rejected",
+    enteredIntoAce?: boolean,
+  ) => {
+    const { data: userData } = await supabase.auth.getUser();
+    const { error } = await supabase
+      .from("score_reports")
+      .update({
+        review_status: next,
+        reviewed_by: userData.user?.id ?? null,
+        reviewed_at: new Date().toISOString(),
+        admin_note: note[row.id] ?? row.admin_note,
+        entered_into_ace: enteredIntoAce ?? row.entered_into_ace,
+      })
+      .eq("id", row.id);
+    if (error) {
+      toast({ title: "Couldn't update the review", description: error.message, variant: "destructive" });
+      return;
+    }
+    if (next === "rejected") {
+      await supabase
+        .from("student_pace_slots")
+        .update({
+          status: "issued",
+          score: null,
+          completed_at: null,
+          score_report_id: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("student_id", row.student_id)
+        .eq("subject_id", row.subject_id)
+        .eq("pace_number", row.pace_number);
+    }
+    toast({ title: next === "approved" ? "Score approved" : "Score rejected" });
+    load();
+  };
+
+  const saveEdits = async (row: ReviewRow) => {
+    const score = draftScore[row.id] ?? row.score ?? "";
+    const pace = Number(draftPace[row.id] ?? row.pace_number);
+    const internal = pace > 1000 ? pace - 1000 : pace;
+    if (internal !== row.pace_number) {
+      await supabase
+        .from("student_pace_slots")
+        .update({
+          status: "issued",
+          score: null,
+          completed_at: null,
+          score_report_id: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("score_report_id", row.id);
+    }
+    const { error } = await supabase
+      .from("score_reports")
+      .update({ score, pace_number: internal })
+      .eq("id", row.id);
+    if (error) {
+      toast({ title: "Couldn't save the score", description: error.message, variant: "destructive" });
+      return;
+    }
+    toast({ title: "Score updated" });
+    load();
+  };
+
+  return (
+    <div className="space-y-4">
+      {!embedded && (
+        <div>
+          <h2 className="text-2xl font-bold font-serif text-primary">Test Reviews</h2>
+          <p className="text-sm text-foreground/60">
+            Uploaded tests waiting for MCA. PACE numbers are the ACE numbers parents see.
+          </p>
+        </div>
+      )}
+      {embedded && <h3 className="font-semibold text-foreground">Test uploads</h3>}
+      <div className="flex flex-wrap gap-2">
+        {["pending", "approved", "rejected", "all"].map((value) => (
+          <Button
+            key={value}
+            type="button"
+            size="sm"
+            variant={status === value ? "default" : "outline"}
+            onClick={() => setStatus(value)}
+          >
+            {value[0].toUpperCase() + value.slice(1)}
+          </Button>
+        ))}
+        {!familyId && (
+          <select
+            className="h-9 rounded-md border bg-background px-2 text-sm"
+            value={familyFilter}
+            onChange={(event) => setFamilyFilter(event.target.value)}
+            aria-label="Family"
+          >
+            <option value="all">All families</option>
+            {[...families.entries()].map(([id, name]) => (
+              <option key={id} value={id}>{name}</option>
+            ))}
+          </select>
+        )}
+      </div>
+      {loading ? (
+        <p className="text-foreground/60">Loading...</p>
+      ) : visible.length === 0 ? (
+        <p className="text-sm text-foreground/60">No test uploads in this view.</p>
+      ) : (
+        <div className="overflow-x-auto rounded-xl border">
+          <table className="w-full text-sm">
+            <thead className="bg-secondary text-left">
+              <tr>
+                <th className="p-3">Date</th>
+                <th className="p-3">Family</th>
+                <th className="p-3">Student</th>
+                <th className="p-3">Subject</th>
+                <th className="p-3">PACE</th>
+                <th className="p-3">Score</th>
+                <th className="p-3">Photos</th>
+                <th className="p-3">Status</th>
+                <th className="p-3">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((row) => {
+                const ace = row.pace_number > 1000 ? row.pace_number : row.pace_number + 1000;
+                return (
+                  <tr key={row.id} className="border-t align-top">
+                    <td className="p-3">{new Date(row.reported_at).toLocaleDateString()}</td>
+                    <td className="p-3">{reviewName(row.students?.families ?? null, "parent_name")}</td>
+                    <td className="p-3">{row.students?.student_name}</td>
+                    <td className="p-3">{reviewName(row.subjects, "name")}</td>
+                    <td className="p-3">
+                      <Input
+                        className="w-24 h-8"
+                        value={draftPace[row.id] ?? String(ace)}
+                        onChange={(event) =>
+                          setDraftPace((prev) => ({ ...prev, [row.id]: event.target.value }))
+                        }
+                      />
+                    </td>
+                    <td className="p-3">
+                      <Input
+                        className="w-20 h-8"
+                        value={draftScore[row.id] ?? row.score ?? ""}
+                        onChange={(event) =>
+                          setDraftScore((prev) => ({ ...prev, [row.id]: event.target.value }))
+                        }
+                      />
+                    </td>
+                    <td className="p-3">
+                      <Button type="button" size="sm" variant="outline" onClick={() => openPhotos(row)}>
+                        Photos
+                      </Button>
+                      <div className="flex gap-1 mt-1">
+                        {(photos[row.id] ?? []).map((url) => (
+                          <button key={url} type="button" onClick={() => setLightbox(url)}>
+                            <img src={url} alt="" className="h-12 w-12 object-cover rounded border" />
+                          </button>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="p-3 capitalize">{row.review_status}</td>
+                    <td className="p-3 space-y-2">
+                      <Input
+                        placeholder="Note to the parent"
+                        value={note[row.id] ?? row.admin_note ?? ""}
+                        onChange={(event) =>
+                          setNote((prev) => ({ ...prev, [row.id]: event.target.value }))
+                        }
+                      />
+                      <label className="flex items-center gap-2 text-xs">
+                        <input
+                          type="checkbox"
+                          checked={row.entered_into_ace}
+                          onChange={(event) =>
+                            supabase
+                              .from("score_reports")
+                              .update({ entered_into_ace: event.target.checked })
+                              .eq("id", row.id)
+                              .then(() => load())
+                          }
+                        />
+                        Entered into ACE
+                      </label>
+                      <div className="flex flex-wrap gap-1">
+                        <Button type="button" size="sm" onClick={() => review(row, "approved", true)}>
+                          Approve
+                        </Button>
+                        <Button type="button" size="sm" variant="destructive" onClick={() => review(row, "rejected")}>
+                          Reject
+                        </Button>
+                        <Button type="button" size="sm" variant="outline" onClick={() => saveEdits(row)}>
+                          Save edits
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {lightbox && (
+        <button
+          type="button"
+          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6"
+          onClick={() => setLightbox(null)}
+        >
+          <img src={lightbox} alt="Test page" className="max-h-full max-w-full" />
+        </button>
+      )}
+    </div>
+  );
+}

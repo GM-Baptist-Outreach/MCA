@@ -12,7 +12,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Plus, Trash2, Printer } from "lucide-react";
-import { currentSchoolYear } from "@/lib/loggedCourses";
+import {
+  compareSubjectNames,
+  currentSchoolYear,
+  subjectDisplayName,
+} from "@/lib/loggedCourses";
 import type { PortalContext } from "../PortalLayout";
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"] as const;
@@ -65,14 +69,37 @@ export default function PortalGoalCard() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    if (!selectedStudent) {
+      setSubjects([]);
+      return;
+    }
+    let ignore = false;
     supabase
-      .from("subjects")
-      .select("id, name")
-      .order("name")
+      .from("student_pace_slots")
+      .select("subject_id, subjects(name)")
+      .eq("student_id", selectedStudent.id)
+      .eq("school_year", currentSchoolYear())
       .then(({ data }) => {
-        if (data) setSubjects(data);
+        if (ignore) return;
+        const map = new Map<string, string>();
+        for (const slot of data ?? []) {
+          map.set(
+            slot.subject_id,
+            subjectNameOf(
+              slot.subjects as { name: string } | { name: string }[] | null,
+            ),
+          );
+        }
+        setSubjects(
+          [...map.entries()]
+            .map(([id, name]) => ({ id, name }))
+            .sort((a, b) => compareSubjectNames(a.name, b.name)),
+        );
       });
-  }, []);
+    return () => {
+      ignore = true;
+    };
+  }, [selectedStudent?.id]);
 
   useEffect(() => {
     if (!selectedStudent) return;
@@ -116,7 +143,7 @@ export default function PortalGoalCard() {
             goals: emptyGoals(),
           });
         }
-        seeded.sort((a, b) => a.subjectName.localeCompare(b.subjectName));
+        seeded.sort((a, b) => compareSubjectNames(a.subjectName, b.subjectName));
         setRows(seeded);
       }
       setLoading(false);
@@ -233,7 +260,7 @@ export default function PortalGoalCard() {
       .map(
         (row) => `
         <tr>
-          <td class="subject">${row.subjectName}</td>
+          <td class="subject">${subjectDisplayName(row.subjectName)}</td>
           ${DAYS.map(
             (d) =>
               `<td class="${row.goals[d].done ? "done" : ""}">${row.goals[d].value || ""}${
@@ -330,7 +357,7 @@ export default function PortalGoalCard() {
               <tbody>
                 {rows.map((row) => (
                   <tr key={row.subjectId} className="border-t border-border/50">
-                    <td className="p-3 font-medium">{row.subjectName}</td>
+                    <td className="p-3 font-medium">{subjectDisplayName(row.subjectName)}</td>
                     {DAYS.map((d) => (
                       <td key={d} className="p-2">
                         <div className="flex items-center justify-center gap-1">
@@ -400,7 +427,7 @@ export default function PortalGoalCard() {
                   .filter((s) => !rows.some((r) => r.subjectId === s.id))
                   .map((s) => (
                     <SelectItem key={s.id} value={s.id}>
-                      {s.name}
+                      {subjectDisplayName(s.name)}
                     </SelectItem>
                   ))}
               </SelectContent>

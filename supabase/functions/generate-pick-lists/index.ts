@@ -1,5 +1,12 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
+import {
+  applyTemplate,
+  PORTAL_LOGIN_URL,
+  renderTemplate,
+  SAMPLE_TEMPLATE_VARS,
+  sendResendEmail,
+} from "../_shared/emailTemplates.ts";
 
 // Cron-ready and admin-callable.
 // One week before a student's next_ship_date, build a pick list of the next
@@ -24,23 +31,10 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-cron-secret",
 };
 
-// Same sender as send-payment-link, stripe-webhook, and admin-comp-enroll.
-// Replies go to David.
-const MCA_FROM_EMAIL = "Midwest Christian Academy <admin@mcahomeschool.com>";
-const MCA_REPLY_TO_EMAIL = "david@midwestchristianacademy.com";
-
 const QUARTER_SHIP_COUNT = 3;
 const SCORE_LOOKBACK = 6;
 const UNISSUED = new Set(["prescribed", "ordered", "in_stock"]);
 const ISSUED = new Set(["issued", "passed", "failed"]);
-
-// Keep in sync with ENGLISH_SUBJECT_PATTERN in src/lib/loggedCourses.ts.
-const ENGLISH_SUBJECT_PATTERN =
-  /\b(english|literature)\b|\blit\b|creative writing/i;
-
-function isEnglishSubjectName(name: string): boolean {
-  return ENGLISH_SUBJECT_PATTERN.test(name);
-}
 
 interface CatalogItem {
   id: string;
@@ -49,6 +43,8 @@ interface CatalogItem {
   range_start: number | null;
   range_end: number | null;
   subject_name: string;
+  original_name: string;
+  sales_price: number;
 }
 
 interface CompanionLine extends CatalogItem {
@@ -61,18 +57,12 @@ function matchPickCompanions(slots: SlotRow[], catalog: CatalogItem[]): Companio
   );
   const matches = new Map<string, CompanionLine>();
   for (const slot of slots) {
-    const paceSubject = subjectName(slot);
     for (const item of catalog) {
       if (paceItemIds.has(item.id)) continue;
+      if (item.item_type !== "key") continue;
+      if (item.subject_id == null || item.subject_id !== slot.subject_id) continue;
       if (item.range_start == null || item.range_end == null) continue;
       if (slot.pace_number < item.range_start || slot.pace_number > item.range_end) continue;
-      const sameSubject = item.subject_id != null && item.subject_id === slot.subject_id;
-      const key = item.item_type === "key" && sameSubject;
-      const novel =
-        item.item_type === "other" &&
-        isEnglishSubjectName(item.subject_name) &&
-        (sameSubject || isEnglishSubjectName(paceSubject));
-      if (!key && !novel) continue;
       const existing = matches.get(item.id);
       if (existing) {
         existing.pace_number = Math.min(existing.pace_number, slot.pace_number);
@@ -82,6 +72,41 @@ function matchPickCompanions(slots: SlotRow[], catalog: CatalogItem[]): Companio
     }
   }
   return [...matches.values()];
+}
+
+function matchResourceBooks(slots: SlotRow[], catalog: CatalogItem[]): CatalogItem[] {
+  const seen = new Set<string>();
+  const matches: CatalogItem[] = [];
+  for (const slot of slots) {
+    for (const item of catalog) {
+      if (seen.has(item.id)) continue;
+      if (item.item_type !== "other") continue;
+      if (item.subject_id == null || item.subject_id !== slot.subject_id) continue;
+      if (item.range_start == null || item.range_end == null) continue;
+      if (slot.pace_number < item.range_start || slot.pace_number > item.range_end) continue;
+      seen.add(item.id);
+      matches.push(item);
+    }
+  }
+  return matches;
+}
+
+const SUBJECT_RANK: Record<string, number> = {
+  Math: 0,
+  English: 10,
+  "Word Building": 20,
+  Science: 30,
+  "Social Studies": 40,
+};
+
+function subjectRank(name: string): number {
+  if (SUBJECT_RANK[name] != null) return SUBJECT_RANK[name];
+  if (/\bword building\b/i.test(name)) return 21;
+  if (/\b(english|literature)\b|\blit\b|creative writing/i.test(name)) return 11;
+  if (/\b(social studies|history|government|economics|geography|civics)\b/i.test(name)) return 41;
+  if (/\b(science|biology|chemistry|physics)\b/i.test(name)) return 31;
+  if (/\b(math|algebra|geometry)\b/i.test(name)) return 1;
+  return 50;
 }
 
 function catalogSubjectName(
@@ -128,6 +153,7 @@ function nextQuarter(slots: SlotRow[]): SlotRow[] {
     bySubject.set(slot.subject_id, list);
   }
   const groups = [...bySubject.values()].sort((a, b) =>
+    subjectRank(subjectName(a[0])) - subjectRank(subjectName(b[0])) ||
     subjectName(a[0]).localeCompare(subjectName(b[0]))
   );
   const picked: SlotRow[] = [];
@@ -185,56 +211,59 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-async function sendReminder(input: {
-  to: string;
-  studentName: string;
-  missing: Array<{ subject: string; pace: number }>;
-}): Promise<{ emailed: boolean }> {
-  const key = Deno.env.get("RESEND_API_KEY");
-  const lines = input.missing
-    .map((row) => `- ${row.subject} PACE ${row.pace}`)
-    .join("\n");
-  const text = [
-    `Hello,`,
-    ``,
-    `Before MCA can ship the next PACEs for ${input.studentName}, we need scores for these already-issued PACEs:`,
-    lines,
-    ``,
-    `Please submit them in the parent portal (Upload Tests) or call us at (844) 663-4477.`,
-    ``,
-    `ACE remains the official grade record. This reminder is only about the shipment.`,
-    ``,
-    `Midwest Christian Academy`,
-  ].join("\n");
+const SCORES_NEEDED_FALLBACK = {
+  subject: "Scores needed before the next PACE shipment for {{student_name}}",
+  html: `<div style="font-family: Georgia, serif; color: #1a1a2e; max-width: 600px;">
+  <p>Hello,</p>
+  <p>Before MCA can ship the next PACEs for {{student_name}}, we need scores for these already-issued PACEs:</p>
+  {{missing_scores}}
+  <p>Please submit them in the parent portal (Upload Tests) or call us at (844) 663-4477.</p>
+  <p>ACE remains the official grade record. This reminder is only about the shipment.</p>
+  <p>Midwest Christian Academy</p>
+</div>`,
+};
 
-  if (!key) {
-    console.log("[generate-pick-lists] RESEND_API_KEY missing; reminder logged only", {
+const BOOK_NEEDED_FALLBACK = {
+  subject: "Books needed for {{student_name}}",
+  html: `<div style="font-family: Georgia, serif; color: #1a1a2e; max-width: 600px;">
+  <p>Your student will need these books for upcoming PACEs:</p>
+  {{book_list}}
+  <p><a href="{{store_url}}">Buy in the MCA store</a></p>
+</div>`,
+};
+
+function acePace(pace: number): number {
+  return pace > 1000 ? pace : pace + 1000;
+}
+
+async function sendReminder(
+  admin: SupabaseClient,
+  input: {
+    to: string;
+    studentName: string;
+    missing: Array<{ subject: string; pace: number }>;
+  },
+): Promise<{ emailed: boolean }> {
+  const missingScores = `<ul>${input.missing
+    .map((row) => `<li>${row.subject} PACE ${acePace(row.pace)}</li>`)
+    .join("")}</ul>`;
+  const rendered = await renderTemplate(admin, "scores_needed_reminder", {
+    student_name: input.studentName,
+    missing_scores: missingScores,
+    portal_url: PORTAL_LOGIN_URL,
+  }, SCORES_NEEDED_FALLBACK);
+  const emailed = await sendResendEmail({
+    to: input.to,
+    subject: rendered.subject,
+    html: rendered.html,
+  });
+  if (!emailed) {
+    console.log("[generate-pick-lists] reminder logged only", {
       to: input.to,
       studentName: input.studentName,
-      missing: input.missing,
     });
-    return { emailed: false };
   }
-
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      from: MCA_FROM_EMAIL,
-      reply_to: MCA_REPLY_TO_EMAIL,
-      to: [input.to],
-      subject: `Scores needed before the next PACE shipment for ${input.studentName}`,
-      text,
-    }),
-  });
-  if (!res.ok) {
-    console.error("[generate-pick-lists] Resend error", res.status, await res.text());
-    return { emailed: false };
-  }
-  return { emailed: true };
+  return { emailed };
 }
 
 Deno.serve(async (req: Request) => {
@@ -245,6 +274,25 @@ Deno.serve(async (req: Request) => {
     if (!auth.ok) return auth.response;
 
     const body = req.method === "POST" ? await req.json().catch(() => ({})) : {};
+    if (body.action === "send_test_email") {
+      const header = req.headers.get("Authorization");
+      if (!header) return json({ error: "Unauthorized" }, 401);
+      const userClient = createClient(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_ANON_KEY")!,
+        { global: { headers: { Authorization: header } } },
+      );
+      const { data: adminFlag, error: adminError } = await userClient.rpc("is_admin");
+      if (adminError || !adminFlag) return json({ error: "Admin only" }, 403);
+      const { data: userData } = await userClient.auth.getUser();
+      const to = userData.user?.email;
+      if (!to) return json({ error: "This admin account has no email." }, 400);
+      const subject = applyTemplate(String(body.subject ?? ""), SAMPLE_TEMPLATE_VARS);
+      const html = applyTemplate(String(body.body_html ?? ""), SAMPLE_TEMPLATE_VARS);
+      if (!subject || !html) return json({ error: "Subject and body are required." }, 400);
+      const sent = await sendResendEmail({ to, subject, html });
+      return json({ sent, to });
+    }
     const onlyStudent: string | undefined = body.student_id;
     const schoolYear: string | undefined = body.school_year;
     const force = body.force === true;
@@ -363,7 +411,7 @@ async function buildForSchedule(
         student_id: schedule.student_id,
       });
     } else if (email) {
-      const sent = await sendReminder({
+      const sent = await sendReminder(admin, {
         to: email,
         studentName: student?.student_name ?? "your student",
         missing: missing.map((slot) => ({
@@ -425,7 +473,7 @@ async function buildForSchedule(
 
   const { data: catalogRows, error: catalogError } = await admin
     .from("items")
-    .select("id, subject_id, item_type, range_start, range_end, subjects(name)")
+    .select("id, subject_id, item_type, range_start, range_end, original_name, sales_price, subjects(name)")
     .in("item_type", ["key", "other"]);
   if (catalogError) throw catalogError;
   const catalog: CatalogItem[] = (catalogRows ?? []).map((row) => ({
@@ -437,8 +485,11 @@ async function buildForSchedule(
     subject_name: catalogSubjectName(
       row.subjects as { name: string } | { name: string }[] | null,
     ),
+    original_name: row.original_name ?? "Book",
+    sales_price: Number(row.sales_price ?? 0),
   }));
   const companions = matchPickCompanions(quarter, catalog);
+  const resourceBooks = matchResourceBooks(quarter, catalog);
 
   const itemIds = [
     ...quarter.map((slot) => slot.item_id),
@@ -537,12 +588,105 @@ async function buildForSchedule(
     })
     .eq("id", schedule.id);
 
+  const bookNotice = await recordResourceBooks(admin, {
+    studentId: schedule.student_id,
+    schoolYear: schedule.school_year,
+    pickListId: pick.id,
+    familyEmail: email,
+    studentName: student?.student_name ?? "your student",
+    books: resourceBooks,
+    parentEmail: email,
+  });
+
   return {
     student_id: schedule.student_id,
     pick_list_id: pick.id,
     status: "ready",
     lines: quarter.length,
+    books_notified: bookNotice.titles,
     next_ship_date: next,
     generated_on: today,
+  };
+}
+
+async function recordResourceBooks(
+  admin: SupabaseClient,
+  input: {
+    studentId: string;
+    schoolYear: string;
+    pickListId: string;
+    familyEmail: string | null;
+    studentName: string;
+    parentEmail: string | null;
+    books: CatalogItem[];
+  },
+): Promise<{ titles: string[] }> {
+  if (input.books.length === 0) return { titles: [] };
+  const bought = new Set<string>();
+  if (input.familyEmail) {
+    const { data: orders } = await admin
+      .from("orders")
+      .select("id, order_items(item_id)")
+      .ilike("customer_email", input.familyEmail)
+      .neq("status", "cancelled");
+    for (const order of orders ?? []) {
+      const lines = order.order_items as Array<{ item_id: string }> | null;
+      for (const line of lines ?? []) bought.add(line.item_id);
+    }
+  }
+  const needed = input.books.filter((book) => !bought.has(book.id));
+  if (needed.length === 0) return { titles: [] };
+
+  const { data: existing } = await admin
+    .from("resource_book_notices")
+    .select("item_id, notified_at")
+    .eq("student_id", input.studentId)
+    .eq("school_year", input.schoolYear)
+    .in("item_id", needed.map((book) => book.id));
+  const already = new Map((existing ?? []).map((row) => [row.item_id, row.notified_at]));
+  const fresh = needed.filter((book) => !already.has(book.id));
+  if (fresh.length > 0) {
+    await admin.from("resource_book_notices").upsert(
+      fresh.map((book) => ({
+        student_id: input.studentId,
+        item_id: book.id,
+        school_year: input.schoolYear,
+        pick_list_id: input.pickListId,
+      })),
+      { onConflict: "student_id,item_id,school_year", ignoreDuplicates: true },
+    );
+  }
+  const unsent = needed.filter((book) => !already.get(book.id));
+  if (unsent.length === 0 || !input.parentEmail) return { titles: [] };
+
+  const site = Deno.env.get("SITE_URL") || "https://mcahomeschool.com";
+  const storeUrl = `${site}/store?add=${unsent.map((book) => book.id).join(",")}`;
+  const bookList = `<ul>${unsent
+    .map((book) => {
+      const price = Number(book.sales_price ?? 0);
+      const title = book.original_name || "Book";
+      return `<li>${title} – $${price.toFixed(2)}</li>`;
+    })
+    .join("")}</ul>`;
+  const rendered = await renderTemplate(admin, "resource_book_needed", {
+    student_name: input.studentName,
+    book_list: bookList,
+    store_url: storeUrl,
+  }, BOOK_NEEDED_FALLBACK);
+  const emailed = await sendResendEmail({
+    to: input.parentEmail,
+    subject: rendered.subject,
+    html: rendered.html,
+  });
+  if (emailed) {
+    await admin
+      .from("resource_book_notices")
+      .update({ notified_at: new Date().toISOString(), pick_list_id: input.pickListId })
+      .eq("student_id", input.studentId)
+      .eq("school_year", input.schoolYear)
+      .in("item_id", unsent.map((book) => book.id));
+  }
+  return {
+    titles: unsent.map((book) => book.original_name || "Book"),
   };
 }

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { supabase } from "@/lib/supabaseClient";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -7,7 +8,9 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -24,14 +27,19 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
+  buildCourseOptions,
   companionKind,
   companionLabel,
+  compareSubjectNames,
+  courseOptionLabel,
   matchingCompanions,
   oklahomaProductTaxCents,
-  paceRangeForLevel,
-  selectPacesForLevel,
   shouldApplyOklahomaStoreTax,
+  SUBJECT_GROUPS,
+  subjectDisplayName,
+  subjectGroup,
   type CompanionKind,
+  type CourseOption,
 } from "@/lib/loggedCourses";
 import { ArrowLeft, Minus, Plus, ShoppingCart, Trash2, X } from "lucide-react";
 
@@ -63,6 +71,8 @@ interface StoreItem {
 interface Subject {
   id: string;
   name: string;
+  store_visible?: boolean | null;
+  sort_order?: number | null;
 }
 
 interface CartLine {
@@ -128,8 +138,11 @@ export default function Store() {
   const [customer, setCustomer] = useState(emptyCustomer);
   const [formError, setFormError] = useState<string | null>(null);
 
+  const [searchParams] = useSearchParams();
+  const appliedCartLink = useRef(false);
   const [bundleSubjectId, setBundleSubjectId] = useState("");
-  const [bundleLevel, setBundleLevel] = useState("7");
+  const [bundleLevel, setBundleLevel] = useState("");
+  const [courseKey, setCourseKey] = useState("");
   const [companionPrompt, setCompanionPrompt] = useState<{
     title: string;
     options: Array<{ item: StoreItem; kind: CompanionKind; checked: boolean }>;
@@ -182,9 +195,8 @@ export default function Store() {
 
       const { data: subjectsData, error: subjectsError } = await supabase
         .from("subjects")
-        .select("id, name")
-        .eq("active", true)
-        .order("name", { ascending: true });
+        .select("id, name, store_visible, sort_order")
+        .eq("active", true);
 
       if (subjectsError) {
         setError(subjectsError.message);
@@ -192,8 +204,18 @@ export default function Store() {
         return;
       }
 
-      setItems(allItems);
-      setSubjects(subjectsData || []);
+      const visibleSubjects = (subjectsData || []).filter(
+        (subject) => subject.store_visible !== false,
+      );
+      const visibleIds = new Set(visibleSubjects.map((subject) => subject.id));
+      setItems(
+        allItems.filter(
+          (item) => item.subject_id == null || visibleIds.has(item.subject_id),
+        ),
+      );
+      setSubjects(
+        visibleSubjects.slice().sort((a, b) => compareSubjectNames(a.name, b.name)),
+      );
       setLoading(false);
     };
     loadData();
@@ -217,7 +239,7 @@ export default function Store() {
     );
     const options = matches.flatMap((item) => {
       const kind = companionKind(item.item_type);
-      return kind ? [{ item, kind, checked: true }] : [];
+      return kind ? [{ item, kind, checked: kind === "key" }] : [];
     });
     if (options.length > 0) setCompanionPrompt({ title, options });
   };
@@ -282,53 +304,47 @@ export default function Store() {
     setCompanionPrompt(null);
   };
 
-  const bundlePreview = useMemo(() => {
-    const level = Number(bundleLevel);
-    if (!bundleSubjectId || !Number.isInteger(level) || level < 1) return null;
-    const selected = selectPacesForLevel(
-      items.flatMap((item) =>
-        item.subject_id && item.pace_number != null
-          ? [
-              {
-                id: item.id,
-                subject_id: item.subject_id,
-                pace_number: item.pace_number,
-                grade_level: item.grade_level,
-              },
-            ]
-          : [],
-      ),
-      bundleSubjectId,
-      level,
-    );
-    const paceItems = selected
-      .map((row) => itemsById.get(row.id))
-      .filter((item): item is StoreItem => !!item);
-    const { start, end } = paceRangeForLevel(level);
-    const total = paceItems.reduce((sum, item) => sum + item.sales_price, 0);
-    return { start, end, paceItems, total };
-  }, [bundleSubjectId, bundleLevel, items, itemsById]);
-
-  const paceSubjects = useMemo(
+  const courseCatalog = useMemo(
     () =>
-      subjects.filter((subject) =>
-        items.some(
-          (item) => item.subject_id === subject.id && item.item_type === "pace",
+      buildCourseOptions(
+        items.flatMap((item) =>
+          item.subject_id
+            ? [
+                {
+                  id: item.id,
+                  subject_id: item.subject_id,
+                  subject_name: item.subjects?.name ?? "Subject",
+                  item_type: item.item_type,
+                  pace_number: item.pace_number,
+                  sales_price: item.sales_price,
+                },
+              ]
+            : [],
         ),
       ),
-    [subjects, items],
+    [items],
   );
 
-  const addFullLevel = () => {
-    if (!bundlePreview || bundlePreview.paceItems.length === 0) {
+  const elementaryCourse =
+    courseCatalog.elementary.find((course) => course.key === bundleSubjectId) ?? null;
+  const elementaryLevel =
+    elementaryCourse?.levels.find((level) => String(level.level) === bundleLevel) ??
+    null;
+  const namedCourse =
+    courseCatalog.courses.find((course) => course.key === courseKey) ?? null;
+
+  const addCourseItems = (option: CourseOption, itemIds: string[], title: string) => {
+    const paceItems = itemIds
+      .map((id) => itemsById.get(id))
+      .filter((item): item is StoreItem => !!item);
+    if (paceItems.length === 0) {
       toast({
-        title: "No PACEs in that level",
-        description: "This subject doesn't have catalog rows for that level.",
+        title: "Nothing to add",
+        description: `${option.displayName} has no catalog rows.`,
         variant: "destructive",
       });
       return;
     }
-    const { paceItems, start, end } = bundlePreview;
     setCart((prev) => {
       const next = [...prev];
       for (const item of paceItems) {
@@ -338,15 +354,35 @@ export default function Store() {
       }
       return next;
     });
-    const subjectName =
-      subjects.find((subject) => subject.id === bundleSubjectId)?.name ??
-      "Subject";
-    toast({
-      title: "Full level added",
-      description: `${subjectName} PACEs ${start}–${end} (${paceItems.length} items, full catalog price)`,
-    });
-    promptForCompanions(paceItems, `${subjectName} PACEs ${start}–${end}`);
+    toast({ title: "Added to cart", description: title });
+    promptForCompanions(paceItems, title);
   };
+
+  useEffect(() => {
+    if (loading || appliedCartLink.current || items.length === 0) return;
+    const raw = searchParams.get("add") || searchParams.get("item");
+    if (!raw) return;
+    const ids = raw.split(",").map((id) => id.trim()).filter(Boolean);
+    const found = ids
+      .map((id) => itemsById.get(id))
+      .filter((item): item is StoreItem => !!item);
+    if (found.length === 0) return;
+    appliedCartLink.current = true;
+    setCart((prev) => {
+      const next = [...prev];
+      for (const item of found) {
+        if (!next.some((line) => line.itemId === item.id)) {
+          next.push({ itemId: item.id, quantity: 1 });
+        }
+      }
+      return next;
+    });
+    setCartOpen(true);
+    toast({
+      title: "Added to cart",
+      description: found.map((item) => item.original_name).join(", "),
+    });
+  }, [loading, items.length, itemsById, searchParams, toast]);
 
   const updateQuantity = (itemId: string, quantity: number) => {
     if (quantity <= 0) {
@@ -549,60 +585,112 @@ export default function Store() {
             </div>
           )}
 
-          <div className="rounded-xl border border-border/50 bg-secondary/40 p-4 mb-6 space-y-3">
+          <div className="rounded-xl border border-border/50 bg-secondary/40 p-4 mb-6 space-y-4">
             <div>
-              <h2 className="font-semibold text-foreground">Buy a full level</h2>
+              <h2 className="font-semibold text-foreground">Buy a course</h2>
               <p className="text-sm text-foreground/60">
-                Level N is PACEs (N−1)×12+1 through N×12 on the catalog
-                pace number (MCA internal numbering). Price is the sum of
-                those item prices. Stock still decrements per PACE.
+                Elementary courses list only the levels that are in the catalog.
+                High school and electives are sold by course name. Price is the
+                sum of those item prices.
               </p>
             </div>
             <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
               <div className="space-y-1.5 sm:w-64">
-                <Label>Subject</Label>
-                <Select value={bundleSubjectId} onValueChange={setBundleSubjectId}>
+                <Label>Elementary course</Label>
+                <Select
+                  value={bundleSubjectId}
+                  onValueChange={(value) => {
+                    setBundleSubjectId(value);
+                    const course = courseCatalog.elementary.find((row) => row.key === value);
+                    setBundleLevel(course?.levels[0] ? String(course.levels[0].level) : "");
+                  }}
+                >
                   <SelectTrigger className="bg-background">
-                    <SelectValue placeholder="Choose a subject" />
+                    <SelectValue placeholder="Choose a course" />
                   </SelectTrigger>
                   <SelectContent>
-                    {paceSubjects.map((subject) => (
-                      <SelectItem key={subject.id} value={subject.id}>
-                        {subject.name}
+                    {courseCatalog.elementary.map((course) => (
+                      <SelectItem key={course.key} value={course.key}>
+                        {course.displayName}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-1.5 sm:w-36">
+              <div className="space-y-1.5 sm:w-72">
                 <Label>Level</Label>
                 <Select value={bundleLevel} onValueChange={setBundleLevel}>
                   <SelectTrigger className="bg-background">
-                    <SelectValue />
+                    <SelectValue placeholder="Level" />
                   </SelectTrigger>
                   <SelectContent>
-                    {Array.from({ length: 12 }, (_, i) => String(i + 1)).map(
-                      (level) => (
-                        <SelectItem key={level} value={level}>
-                          Level {level}
-                        </SelectItem>
-                      ),
-                    )}
+                    {(elementaryCourse?.levels ?? []).map((level) => (
+                      <SelectItem key={level.level} value={String(level.level)}>
+                        {elementaryCourse
+                          ? courseOptionLabel(elementaryCourse, level)
+                          : `Level ${level.level}`}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
-              <Button type="button" onClick={addFullLevel} disabled={!bundleSubjectId}>
-                Add full level
+              <Button
+                type="button"
+                onClick={() => {
+                  if (!elementaryCourse || !elementaryLevel) return;
+                  addCourseItems(
+                    elementaryCourse,
+                    elementaryLevel.items.map((item) => item.id),
+                    courseOptionLabel(elementaryCourse, elementaryLevel),
+                  );
+                }}
+                disabled={!elementaryLevel}
+              >
+                Add level
               </Button>
             </div>
-            {bundlePreview && (
-              <p className="text-sm text-foreground/70">
-                PACEs {bundlePreview.start}–{bundlePreview.end}:{" "}
-                {bundlePreview.paceItems.length} in stock catalog
-                {bundlePreview.paceItems.length > 0 &&
-                  ` · $${bundlePreview.total.toFixed(2)}`}
-              </p>
-            )}
+            <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
+              <div className="space-y-1.5 sm:flex-1">
+                <Label>High school and electives</Label>
+                <Select value={courseKey} onValueChange={setCourseKey}>
+                  <SelectTrigger className="bg-background">
+                    <SelectValue placeholder="Choose a course" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {SUBJECT_GROUPS.map((group) => {
+                      const groupCourses = courseCatalog.courses.filter(
+                        (course) => (subjectGroup(course.subjectNames[0] ?? "") ?? "Electives") === group,
+                      );
+                      if (groupCourses.length === 0) return null;
+                      return (
+                        <SelectGroup key={group}>
+                          <SelectLabel>{group}</SelectLabel>
+                          {groupCourses.map((course) => (
+                            <SelectItem key={course.key} value={course.key}>
+                              {courseOptionLabel(course)}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button
+                type="button"
+                onClick={() => {
+                  if (!namedCourse) return;
+                  addCourseItems(
+                    namedCourse,
+                    namedCourse.items.map((item) => item.id),
+                    courseOptionLabel(namedCourse),
+                  );
+                }}
+                disabled={!namedCourse}
+              >
+                Add course
+              </Button>
+            </div>
           </div>
 
           <div className="flex flex-col sm:flex-row gap-3 mb-6">
@@ -620,7 +708,7 @@ export default function Store() {
                 <SelectItem value="all">All subjects</SelectItem>
                 {subjects.map((s) => (
                   <SelectItem key={s.id} value={s.id}>
-                    {s.name}
+                    {subjectDisplayName(s.name)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -657,7 +745,7 @@ export default function Store() {
                     >
                       <div>
                         <p className="text-xs uppercase tracking-wide text-foreground/50 mb-1">
-                          {item.subjects?.name ?? "Uncategorized"} ·{" "}
+                          {subjectDisplayName(item.subjects?.name ?? "Uncategorized")} ·{" "}
                           {item.item_type}
                         </p>
                         <h3 className="font-semibold text-foreground mb-2">

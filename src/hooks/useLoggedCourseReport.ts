@@ -6,10 +6,14 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import {
   average,
+  compareSubjectNames,
   currentSchoolYear,
+  isDateInSchoolYear,
   isSlotCompleted,
+  quarterColumnHeaders,
   quarterForCompletedAt,
   reportLetter,
+  toInternalPaceNumber,
   type QuarterAverages,
   type ReportLetter,
   type ReportQuarterKey,
@@ -60,6 +64,7 @@ interface ScoreRow {
   pace_number: number;
   score: string | null;
   reported_at: string;
+  review_status?: string | null;
 }
 
 function subjectNameOf(row: SlotRow): string {
@@ -78,7 +83,11 @@ function emptyQuarterAverages(): QuarterAverages {
   return { Q1: null, Q2: null, Q3: null, Q4: null };
 }
 
-function quarterAveragesFor(cells: ReportCell[], schoolYear: string): QuarterAverages {
+function quarterAveragesFor(
+  cells: ReportCell[],
+  schoolYear: string,
+  startDate: string | null,
+): QuarterAverages {
   const grouped: Record<ReportQuarterKey, number[]> = {
     Q1: [],
     Q2: [],
@@ -87,7 +96,7 @@ function quarterAveragesFor(cells: ReportCell[], schoolYear: string): QuarterAve
   };
   for (const cell of cells) {
     if (cell.score == null) continue;
-    const quarter = quarterForCompletedAt(cell.completedAt, schoolYear);
+    const quarter = quarterForCompletedAt(cell.completedAt, schoolYear, startDate);
     if (!quarter) continue;
     grouped[quarter].push(cell.score);
   }
@@ -105,13 +114,15 @@ export function useLoggedCourseReport(studentId: string | undefined) {
   const [slots, setSlots] = useState<SlotRow[]>([]);
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [subjectNames, setSubjectNames] = useState<Map<string, string>>(new Map());
+  const [schoolStartDate, setSchoolStartDate] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     if (!studentId) return;
     let ignore = false;
     const load = async () => {
       setLoading(true);
-      const [slotRes, scoreRes, subjectRes] = await Promise.all([
+      const [slotRes, scoreRes, subjectRes, calendarRes] = await Promise.all([
         supabase
           .from("student_pace_slots")
           .select(
@@ -122,23 +133,39 @@ export function useLoggedCourseReport(studentId: string | undefined) {
           .order("slot_index"),
         supabase
           .from("score_reports")
-          .select("id, subject_id, pace_number, score, reported_at")
+          .select("id, subject_id, pace_number, score, reported_at, review_status")
           .eq("student_id", studentId),
         supabase.from("subjects").select("id, name"),
+        supabase
+          .from("student_school_calendars")
+          .select("start_date")
+          .eq("student_id", studentId)
+          .eq("school_year", schoolYear)
+          .maybeSingle(),
       ]);
       if (ignore) return;
       setSlots((slotRes.data ?? []) as SlotRow[]);
-      setScores((scoreRes.data ?? []) as ScoreRow[]);
+      const scoreRows = (scoreRes.data ?? []) as ScoreRow[];
+      if (scoreRes.error) {
+        const fallback = await supabase
+          .from("score_reports")
+          .select("id, subject_id, pace_number, score, reported_at")
+          .eq("student_id", studentId);
+        setScores((fallback.data ?? []) as ScoreRow[]);
+      } else {
+        setScores(scoreRows);
+      }
       setSubjectNames(
         new Map((subjectRes.data ?? []).map((subject) => [subject.id, subject.name])),
       );
+      setSchoolStartDate(calendarRes.error ? null : calendarRes.data?.start_date ?? null);
       setLoading(false);
     };
     load();
     return () => {
       ignore = true;
     };
-  }, [studentId, schoolYear]);
+  }, [studentId, schoolYear, refreshKey]);
 
   const grids = useMemo<SubjectGrid[]>(() => {
     const bySubject = new Map<string, SlotRow[]>();
@@ -164,8 +191,9 @@ export function useLoggedCourseReport(studentId: string | undefined) {
           }
           const reported = scores.find(
             (score) =>
+              score.review_status !== "rejected" &&
               score.subject_id === subjectId &&
-              score.pace_number === slot.pace_number,
+              toInternalPaceNumber(score.pace_number) === slot.pace_number,
           );
           const reportedScore = parseScore(reported?.score);
           const reportedDay = reported?.reported_at?.slice(0, 10) ?? null;
@@ -198,13 +226,13 @@ export function useLoggedCourseReport(studentId: string | undefined) {
           subjectName: subjectNameOf(subjectSlots[0]),
           cells,
           average: average(cells.map((cell) => cell.score)),
-          quarterAverages: quarterAveragesFor(cells, schoolYear),
+          quarterAverages: quarterAveragesFor(cells, schoolYear, schoolStartDate),
           completed,
           remaining: prescribed.length - completed,
         };
       })
-      .sort((a, b) => a.subjectName.localeCompare(b.subjectName));
-  }, [slots, scores, schoolYear]);
+      .sort((a, b) => compareSubjectNames(a.subjectName, b.subjectName));
+  }, [slots, scores, schoolYear, schoolStartDate]);
 
   const stars = useMemo<StarPace[]>(() => {
     const seen = new Set<string>();
@@ -224,32 +252,40 @@ export function useLoggedCourseReport(studentId: string | undefined) {
       }
     }
     for (const score of scores) {
+      if (score.review_status === "rejected") continue;
+      if (!isDateInSchoolYear(score.reported_at, schoolYear)) continue;
       const numeric = parseScore(score.score);
       if (numeric == null || numeric < 80) continue;
-      const key = `${score.subject_id}:${score.pace_number}`;
+      const paceNumber = toInternalPaceNumber(score.pace_number);
+      const key = `${score.subject_id}:${paceNumber}`;
       if (seen.has(key)) continue;
       seen.add(key);
       list.push({
         key: score.id,
         subjectName: subjectNames.get(score.subject_id) ?? "Subject",
-        paceNumber: score.pace_number,
+        paceNumber,
         score: numeric,
         date: score.reported_at.slice(0, 10),
       });
     }
     return list.sort(
       (a, b) =>
-        a.subjectName.localeCompare(b.subjectName) || a.paceNumber - b.paceNumber,
+        compareSubjectNames(a.subjectName, b.subjectName) || a.paceNumber - b.paceNumber,
     );
-  }, [grids, scores, subjectNames]);
+  }, [grids, scores, subjectNames, schoolYear]);
 
   const overall = average(grids.map((grid) => grid.average));
   const completed = grids.reduce((sum, grid) => sum + grid.completed, 0);
   const remaining = grids.reduce((sum, grid) => sum + grid.remaining, 0);
 
+  const quarterHeaders = quarterColumnHeaders(schoolStartDate);
+
   return {
     schoolYear,
     setSchoolYear,
+    schoolStartDate,
+    quarterHeaders,
+    refresh: () => setRefreshKey((value) => value + 1),
     loading,
     grids,
     stars,
@@ -257,4 +293,65 @@ export function useLoggedCourseReport(studentId: string | undefined) {
     completed,
     remaining,
   };
+}
+
+export interface PrescribedPace {
+  id: string;
+  subjectId: string;
+  subjectName: string;
+  paceNumber: number;
+  status: string;
+  score: number | null;
+}
+
+export function usePrescribedSubjects(studentId: string | undefined, schoolYear: string) {
+  const [rows, setRows] = useState<PrescribedPace[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!studentId) {
+      setRows([]);
+      return;
+    }
+    let ignore = false;
+    const load = async () => {
+      setLoading(true);
+      const { data } = await supabase
+        .from("student_pace_slots")
+        .select("id, subject_id, pace_number, status, score, subjects(name)")
+        .eq("student_id", studentId)
+        .eq("school_year", schoolYear)
+        .order("slot_index");
+      if (ignore) return;
+      setRows(
+        (data ?? []).map((row) => {
+          const rel = row.subjects as { name: string } | { name: string }[] | null;
+          const subjectName = Array.isArray(rel) ? rel[0]?.name ?? "Subject" : rel?.name ?? "Subject";
+          return {
+            id: row.id,
+            subjectId: row.subject_id,
+            subjectName,
+            paceNumber: row.pace_number,
+            status: row.status,
+            score: row.score,
+          };
+        }),
+      );
+      setLoading(false);
+    };
+    load();
+    return () => {
+      ignore = true;
+    };
+  }, [studentId, schoolYear]);
+
+  const subjects = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const row of rows) map.set(row.subjectId, row.subjectName);
+    return [...map.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => compareSubjectNames(a.name, b.name));
+  }, [rows]);
+
+  return { rows, subjects, loading };
 }

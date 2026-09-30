@@ -11,17 +11,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  compareSubjectNames,
   currentSchoolYear,
   SUBJECT_GROUPS,
+  subjectDisplayName,
   subjectGroup,
+  toAcePaceNumber,
   type SubjectGroup,
 } from "@/lib/loggedCourses";
 import type { PortalContext } from "./PortalLayout";
-
-interface Subject {
-  id: string;
-  name: string;
-}
 
 interface PaceSlotRow {
   id: string;
@@ -84,24 +82,12 @@ export default function PortalPaceStatus() {
   const { selectedStudent } = useOutletContext<PortalContext>();
   const { toast } = useToast();
 
-  const [subjects, setSubjects] = useState<Subject[]>([]);
   const [group, setGroup] = useState<SubjectGroup | "">("");
   const [electiveSubjectId, setElectiveSubjectId] = useState("");
   const [slots, setSlots] = useState<PaceSlotRow[]>([]);
   const [schoolYear, setSchoolYear] = useState(currentSchoolYear());
   const [loading, setLoading] = useState(false);
   const [savingSlotId, setSavingSlotId] = useState<string | null>(null);
-
-  useEffect(() => {
-    supabase
-      .from("subjects")
-      .select("id, name")
-      .eq("active", true)
-      .order("name")
-      .then(({ data }) => {
-        if (data) setSubjects(data);
-      });
-  }, []);
 
   useEffect(() => {
     if (!selectedStudent) {
@@ -156,6 +142,14 @@ export default function PortalPaceStatus() {
     };
   }, [selectedStudent?.id, schoolYear, toast]);
 
+  const prescribedGroups = useMemo(
+    () =>
+      SUBJECT_GROUPS.filter((name) =>
+        slots.some((slot) => subjectGroup(slot.subjectName) === name),
+      ),
+    [slots],
+  );
+
   const electiveOptions = useMemo(() => {
     const fromSlots = new Map<string, string>();
     for (const slot of slots) {
@@ -163,14 +157,10 @@ export default function PortalPaceStatus() {
         fromSlots.set(slot.subject_id, slot.subjectName);
       }
     }
-    const source =
-      fromSlots.size > 0
-        ? [...fromSlots.entries()].map(([id, name]) => ({ id, name }))
-        : subjects.filter((subject) => subjectGroup(subject.name) === "Electives");
-    return [...source].sort((a, b) =>
-      a.name.localeCompare(b.name, undefined, { numeric: true }),
-    );
-  }, [slots, subjects]);
+    return [...fromSlots.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => compareSubjectNames(a.name, b.name));
+  }, [slots]);
 
   const rows = useMemo(() => {
     if (!group) return [];
@@ -181,7 +171,7 @@ export default function PortalPaceStatus() {
       })
       .sort(
         (a, b) =>
-          a.subjectName.localeCompare(b.subjectName, undefined, { numeric: true }) ||
+          compareSubjectNames(a.subjectName, b.subjectName) ||
           a.slot_index - b.slot_index,
       );
   }, [slots, group, electiveSubjectId]);
@@ -257,7 +247,7 @@ export default function PortalPaceStatus() {
             <SelectValue placeholder="Select a subject" />
           </SelectTrigger>
           <SelectContent>
-            {SUBJECT_GROUPS.map((name) => (
+            {prescribedGroups.map((name) => (
               <SelectItem key={name} value={name}>
                 {name}
               </SelectItem>
@@ -270,11 +260,17 @@ export default function PortalPaceStatus() {
               <SelectValue placeholder="Select an elective" />
             </SelectTrigger>
             <SelectContent>
-              {electiveOptions.map((subject) => (
-                <SelectItem key={subject.id} value={subject.id}>
-                  {subject.name}
+              {electiveOptions.length === 0 ? (
+                <SelectItem value="none" disabled>
+                  No electives prescribed
                 </SelectItem>
-              ))}
+              ) : (
+                electiveOptions.map((subject) => (
+                  <SelectItem key={subject.id} value={subject.id}>
+                    {subjectDisplayName(subject.name)}
+                  </SelectItem>
+                ))
+              )}
             </SelectContent>
           </Select>
         )}
@@ -294,8 +290,12 @@ export default function PortalPaceStatus() {
       ) : !showTable ? (
         <p className="text-foreground/60">
           {group === "Electives"
-            ? "Pick an elective to see this year's PACEs."
-            : "Pick a subject to see PACE status."}
+            ? electiveOptions.length === 0
+              ? "No electives prescribed."
+              : "Pick an elective to see this year's PACEs."
+            : prescribedGroups.length === 0
+              ? "Contact MCA. No courses are prescribed for this school year."
+              : "Pick a subject to see PACE status."}
         </p>
       ) : rows.length === 0 ? (
         <p className="text-foreground/60">
@@ -321,9 +321,9 @@ export default function PortalPaceStatus() {
                   label !== "completed" && slot.item_id != null;
                 return (
                   <tr key={slot.id} className="border-t border-border/50">
-                    <td className="p-3">{slot.subjectName}</td>
+                    <td className="p-3">{subjectDisplayName(slot.subjectName)}</td>
                     <td className="p-3">{slot.slot_index}</td>
-                    <td className="p-3">{slot.pace_number}</td>
+                    <td className="p-3">{toAcePaceNumber(slot.pace_number)}</td>
                     <td className="p-3">{slot.itemName}</td>
                     <td className="p-3">
                       <span

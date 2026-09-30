@@ -28,6 +28,13 @@ describe("Admin payment mode toggle", () => {
     });
     upsertMock.mockResolvedValue({ error: null });
     fromMock.mockImplementation((table: string) => {
+      if (table === "email_templates") {
+        return {
+          select: () => ({
+            order: () => Promise.resolve({ data: [], error: null }),
+          }),
+        };
+      }
       expect(table).toBe("app_settings");
       return {
         select: () => ({

@@ -12,7 +12,9 @@ import { ReportChrome } from "./ReportChrome";
 import {
   SUBJECT_GROUPS,
   SUBJECT_GROUP_COLORS,
+  subjectDisplayName,
   subjectGroup,
+  toAcePaceNumber,
 } from "@/lib/loggedCourses";
 
 export default function PortalStarChart() {
@@ -63,30 +65,34 @@ export default function PortalStarChart() {
           {grouped.map(([subject, stars]) => {
             const group = subjectGroup(subject) ?? "Electives";
             const starClass = SUBJECT_GROUP_COLORS[group].star;
+            const label = subjectDisplayName(subject);
             return (
               <div key={subject}>
-                <h3 className="font-semibold mb-2">{subject}</h3>
+                <h3 className="font-semibold mb-2">{label}</h3>
                 <div className="flex flex-wrap gap-3">
-                  {stars.map((star) => (
+                  {stars.map((star) => {
+                    const ace = toAcePaceNumber(star.paceNumber);
+                    return (
                     <Tooltip key={star.key}>
                       <TooltipTrigger asChild>
                         <button
                           type="button"
                           className="flex flex-col items-center gap-1"
-                          aria-label={`${subject} PACE ${star.paceNumber}, score ${star.score}`}
+                          aria-label={`${label} PACE ${ace}, score ${star.score}`}
                         >
                           <Star className={`h-8 w-8 ${starClass}`} />
-                          <span className="text-xs text-foreground/60">{star.paceNumber}</span>
+                          <span className="text-xs text-foreground/60">{ace}</span>
                         </button>
                       </TooltipTrigger>
                       <TooltipContent>
                         <p>
-                          PACE {star.paceNumber}: {star.score}%
+                          PACE {ace}: {star.score}%
                           {star.date ? ` on ${star.date}` : ""}
                         </p>
                       </TooltipContent>
                     </Tooltip>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             );
