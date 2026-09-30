@@ -3,6 +3,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import Stripe from "npm:stripe@17.4.0";
 import { readPaymentMode, resolveStripeSecretKey } from "../_shared/paymentMode.ts";
 import { readEdgePaymentEnv } from "../_shared/readEdgeEnv.ts";
+import { corsHeadersFor, forbiddenOriginResponse, matchAllowedOrigin } from "../_shared/allowedOrigin.ts";
 
 // Public — called from the Enroll page. Creates a Stripe Checkout Session,
 // one line item per DISTINCT price (grouped by tier, quantity = headcount at
@@ -15,24 +16,24 @@ import { readEdgePaymentEnv } from "../_shared/readEdgeEnv.ts";
 // requests a carrier rate. Oklahoma tax and Shippo live only in
 // create-store-order-checkout, and only for store shipments.
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
-
 function tierFor(lastGradeCompleted: string): "elementary" | "high_school" | null {
   if (!lastGradeCompleted || lastGradeCompleted === "none") return null;
   return ["8", "9", "10", "11"].includes(lastGradeCompleted) ? "high_school" : "elementary";
 }
 
 Deno.serve(async (req: Request) => {
+  // Only allow-listed browser origins may start a checkout (see _shared/allowedOrigin.ts).
+  const allowedOrigin = matchAllowedOrigin(req);
+  if (!allowedOrigin) return forbiddenOriginResponse();
+  const corsHeaders = corsHeadersFor(allowedOrigin);
+
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
 
   try {
     const body = await req.json();
-    const { parent, paymentPlan, students, origin } = body ?? {};
+    const { parent, paymentPlan, students } = body ?? {}; // body.origin is ignored; the validated Origin header is used
 
     if (
       !parent?.email || !parent?.firstName || !parent?.lastName || !parent?.phone ||
@@ -128,7 +129,8 @@ Deno.serve(async (req: Request) => {
     }
     const line_items = Object.entries(quantityByPriceId).map(([price, quantity]) => ({ price, quantity }));
 
-    const siteUrl = origin || Deno.env.get("SITE_URL") || "https://mcahomeschool.com";
+    // Redirect base is the allow-listed Origin header, never a client-supplied value.
+    const siteUrl = allowedOrigin;
 
     // Stripe metadata values are capped at 500 chars each, so full JSON blobs
     // risk truncation/errors for larger families. Encode compactly instead:
