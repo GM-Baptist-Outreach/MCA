@@ -29,7 +29,7 @@ const SCORE_LOOKBACK = 6;
 const UNISSUED = new Set(["prescribed", "ordered", "in_stock"]);
 const ISSUED = new Set(["issued", "passed", "failed"]);
 
-// Keep in sync with src/lib/subjectGroups.ts ENGLISH_SUBJECT_PATTERN.
+// Keep in sync with ENGLISH_SUBJECT_PATTERN in src/lib/loggedCourses.ts.
 const ENGLISH_SUBJECT_PATTERN =
   /\b(english|literature)\b|\blit\b|creative writing/i;
 

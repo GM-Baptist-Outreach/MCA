@@ -13,7 +13,7 @@ import {
   SUBJECT_GROUPS,
   SUBJECT_GROUP_COLORS,
   subjectGroup,
-} from "@/lib/subjectGroups";
+} from "@/lib/loggedCourses";
 
 export default function PortalStarChart() {
   const { selectedStudent } = useOutletContext<PortalContext>();

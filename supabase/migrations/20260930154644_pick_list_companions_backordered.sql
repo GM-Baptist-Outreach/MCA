@@ -1,7 +1,7 @@
 -- Pick lists: companion keys and English novels, keep a stock of 0,
 -- and flag backordered lines. Partial lists still ship. Nothing is held
 -- because a line is backordered.
--- English-group names match src/lib/subjectGroups.ts ENGLISH_SUBJECT_PATTERN.
+-- English-group names match ENGLISH_SUBJECT_PATTERN in src/lib/loggedCourses.ts.
 -- Postgres uses \m and \M where JavaScript uses \b.
 
 alter table public.pick_list_items

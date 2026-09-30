@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { trackedStock } from "@/lib/pickListStock";
-import { quarterForCompletedAt, REPORT_QUARTERS } from "@/lib/schoolQuarters";
 import {
   ELECTIVE_EXCLUSIONS,
   isExcludedStoreCategory,
   matchingPickListCompanions,
+  quarterForCompletedAt,
+  REPORT_QUARTERS,
   subjectGroup,
   SUBJECT_GROUPS,
-} from "@/lib/subjectGroups";
+  trackedStock,
+} from "@/lib/loggedCourses";
 
 describe("subject groups", () => {
   it("offers the six portal groups in order", () => {
