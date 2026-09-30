@@ -7,6 +7,7 @@ import {
   resolveStripeSecretKey,
 } from "../_shared/paymentMode.ts";
 import { readEdgePaymentEnv } from "../_shared/readEdgeEnv.ts";
+import { corsHeadersFor, forbiddenOriginResponse, matchAllowedOrigin } from "../_shared/allowedOrigin.ts";
 import {
   quoteStoreShippoRate,
   shippingTierFeeCents,
@@ -23,11 +24,6 @@ import {
 // Shippo key is set. Any Shippo miss falls back to shipping_rate_tiers.
 // Pickup never calls Shippo. Enrollment never calls this function.
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
-
 const OK_SALES_TAX_RATE = 0.10;
 
 function normalizeState(raw: unknown): string {
@@ -39,13 +35,18 @@ function isOklahomaState(state: string): boolean {
 }
 
 Deno.serve(async (req: Request) => {
+  // Only allow-listed browser origins may start a checkout (see _shared/allowedOrigin.ts).
+  const allowedOrigin = matchAllowedOrigin(req);
+  if (!allowedOrigin) return forbiddenOriginResponse();
+  const corsHeaders = corsHeadersFor(allowedOrigin);
+
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
 
   try {
     const body = await req.json();
-    const { items, customer, origin } = body ?? {};
+    const { items, customer } = body ?? {}; // body.origin is ignored; the validated Origin header is used
 
     if (!Array.isArray(items) || items.length === 0) {
       return new Response(JSON.stringify({ error: "Your cart is empty" }), {
@@ -240,7 +241,8 @@ Deno.serve(async (req: Request) => {
           : {}),
       });
 
-    const siteUrl = origin || Deno.env.get("SITE_URL") || "https://mcahomeschool.com";
+    // Redirect base is the allow-listed Origin header, never a client-supplied value.
+    const siteUrl = allowedOrigin;
 
     const metadata: Record<string, string> = {
       order_type: "store",

@@ -1,0 +1,43 @@
+-- Performance advisor (unindexed_foreign_keys, 40 findings on 2026-09-30):
+-- add a covering btree index for every foreign key in public that lacked one.
+-- Tables are small, so a plain CREATE INDEX (brief lock) is fine inside a migration.
+create index if not exists app_settings_updated_by_idx on public.app_settings (updated_by);
+create index if not exists course_completions_entered_by_idx on public.course_completions (entered_by);
+create index if not exists course_completions_subject_id_idx on public.course_completions (subject_id);
+create index if not exists enrollments_family_id_idx on public.enrollments (family_id);
+create index if not exists enrollments_student_id_idx on public.enrollments (student_id);
+create index if not exists families_auth_user_id_idx on public.families (auth_user_id);
+create index if not exists form_submissions_family_id_idx on public.form_submissions (family_id);
+create index if not exists form_submissions_student_id_idx on public.form_submissions (student_id);
+create index if not exists inventory_levels_location_id_idx on public.inventory_levels (location_id);
+create index if not exists order_fees_fee_id_idx on public.order_fees (fee_id);
+create index if not exists order_fees_order_id_idx on public.order_fees (order_id);
+create index if not exists order_items_order_id_idx on public.order_items (order_id);
+create index if not exists orders_family_id_idx on public.orders (family_id);
+create index if not exists orders_location_id_idx on public.orders (location_id);
+create index if not exists orders_student_id_idx on public.orders (student_id);
+create index if not exists pace_status_item_id_idx on public.pace_status (item_id);
+create index if not exists pace_status_order_item_id_idx on public.pace_status (order_item_id);
+create index if not exists pick_list_items_item_id_idx on public.pick_list_items (item_id);
+create index if not exists pick_list_items_pace_slot_id_idx on public.pick_list_items (pace_slot_id);
+create index if not exists pick_list_items_pick_list_id_idx on public.pick_list_items (pick_list_id);
+create index if not exists pick_list_items_subject_id_idx on public.pick_list_items (subject_id);
+create index if not exists price_change_log_changed_by_idx on public.price_change_log (changed_by);
+create index if not exists price_change_log_fee_id_idx on public.price_change_log (fee_id);
+create index if not exists price_change_log_item_id_idx on public.price_change_log (item_id);
+create index if not exists price_change_log_subscription_plan_id_idx on public.price_change_log (subscription_plan_id);
+create index if not exists price_import_batches_imported_by_idx on public.price_import_batches (imported_by);
+create index if not exists required_pace_plans_subject_id_idx on public.required_pace_plans (subject_id);
+create index if not exists resource_book_notices_item_id_idx on public.resource_book_notices (item_id);
+create index if not exists resource_book_notices_pick_list_id_idx on public.resource_book_notices (pick_list_id);
+create index if not exists resource_book_notices_purchased_order_id_idx on public.resource_book_notices (purchased_order_id);
+create index if not exists score_reports_student_id_idx on public.score_reports (student_id);
+create index if not exists score_reports_subject_id_idx on public.score_reports (subject_id);
+create index if not exists student_pace_slots_item_id_idx on public.student_pace_slots (item_id);
+create index if not exists student_pace_slots_score_report_id_idx on public.student_pace_slots (score_report_id);
+create index if not exists student_pace_slots_subject_id_idx on public.student_pace_slots (subject_id);
+create index if not exists students_family_id_idx on public.students (family_id);
+create index if not exists subscription_change_log_changed_by_idx on public.subscription_change_log (changed_by);
+create index if not exists subscription_change_log_enrollment_id_idx on public.subscription_change_log (enrollment_id);
+create index if not exists subscription_change_log_new_plan_id_idx on public.subscription_change_log (new_plan_id);
+create index if not exists subscription_change_log_old_plan_id_idx on public.subscription_change_log (old_plan_id);
