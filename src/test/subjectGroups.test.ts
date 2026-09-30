@@ -49,6 +49,19 @@ describe("subject groups", () => {
     expect(subjectGroup("Art")).toBe("Electives");
   });
 
+  it("maps the MCA catalog edge cases to the right core group", () => {
+    expect(subjectGroup("Trigonometry")).toBe("Math");
+    expect(subjectGroup("Business Math")).toBe("Math");
+    expect(subjectGroup("Constitution")).toBe("Social Studies");
+    expect(subjectGroup("Physical Sci LabsSet")).toBe("Science");
+    expect(subjectGroup("Biology Labs")).toBe("Science");
+    expect(subjectGroup("Chemistry Labs")).toBe("Science");
+    expect(subjectGroup("Physics Lab")).toBe("Science");
+    expect(subjectGroup("Math Diagnostic Test")).toBeNull();
+    expect(subjectGroup("Business & Career Electives")).toBe("Electives");
+    expect(subjectGroup("Spanish Act Pac")).toBe("Electives");
+  });
+
   it("excludes store categories from electives", () => {
     for (const name of ELECTIVE_EXCLUSIONS) {
       expect(isExcludedStoreCategory(name)).toBe(true);

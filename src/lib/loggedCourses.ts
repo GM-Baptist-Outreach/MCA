@@ -392,9 +392,14 @@ export const ENGLISH_SUBJECT_PATTERN =
 
 const WORD_BUILDING_PATTERN = /\bword building\b/i;
 const SOCIAL_STUDIES_PATTERN =
-  /\b(social studies|history|government|economics|geography|civics)\b/i;
-const SCIENCE_PATTERN = /\b(science|biology|chemistry|physics)\b/i;
-const MATH_PATTERN = /\b(math|algebra|geometry)\b/i;
+  /\b(social studies|history|government|economics|geography|civics|constitution)\b/i;
+// "Sci" covers abbreviations like "Physical Sci LabsSet". Lab and lab-set
+// subjects (Biology Labs, Physics Lab) are science unless excluded above.
+const SCIENCE_PATTERN =
+  /\b(science|sci|biology|chemistry|physics|anatomy)\b|\blabs?(set)?\b/i;
+// Business Math, Trigonometry, Pre-Algebra, Calculus, Statistics are math.
+const MATH_PATTERN =
+  /\b(math|mathematics|algebra|pre-algebra|geometry|trigonometry|trig|calculus|pre-calculus|statistics)\b/i;
 
 export function isExcludedStoreCategory(name: string): boolean {
   const normalized = name.trim().toLowerCase().replace(/\s+/g, " ");

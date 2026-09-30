@@ -24,6 +24,11 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-cron-secret",
 };
 
+// Same sender as send-payment-link, stripe-webhook, and admin-comp-enroll.
+// Replies go to David.
+const MCA_FROM_EMAIL = "Midwest Christian Academy <admin@mcahomeschool.com>";
+const MCA_REPLY_TO_EMAIL = "david@midwestchristianacademy.com";
+
 const QUARTER_SHIP_COUNT = 3;
 const SCORE_LOOKBACK = 6;
 const UNISSUED = new Set(["prescribed", "ordered", "in_stock"]);
@@ -211,8 +216,6 @@ async function sendReminder(input: {
     return { emailed: false };
   }
 
-  const from = Deno.env.get("RESEND_FROM_EMAIL") ??
-    "Midwest Christian Academy <onboarding@resend.dev>";
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
@@ -220,7 +223,8 @@ async function sendReminder(input: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      from,
+      from: MCA_FROM_EMAIL,
+      reply_to: MCA_REPLY_TO_EMAIL,
       to: [input.to],
       subject: `Scores needed before the next PACE shipment for ${input.studentName}`,
       text,
