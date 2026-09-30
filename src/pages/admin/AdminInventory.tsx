@@ -29,12 +29,16 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Upload, Download } from "lucide-react";
+import { compareSubjectNames, compareSubjects, subjectDisplayName } from "@/lib/loggedCourses";
 
 type ItemType = "pace" | "key" | "dvd" | "other";
 
 interface Subject {
   id: string;
   name: string;
+  active?: boolean;
+  store_visible?: boolean | null;
+  sort_order?: number | null;
 }
 
 interface Item {
@@ -70,9 +74,7 @@ const TYPE_SORT: Record<ItemType, number> = {
 };
 
 function compareInventoryItems(a: Item, b: Item): number {
-  const bySubject = (a.subjects?.name ?? "").localeCompare(b.subjects?.name ?? "", undefined, {
-    numeric: true,
-  });
+  const bySubject = compareSubjectNames(a.subjects?.name ?? "", b.subjects?.name ?? "");
   if (bySubject !== 0) return bySubject;
   const byType = (TYPE_SORT[a.item_type] ?? 99) - (TYPE_SORT[b.item_type] ?? 99);
   if (byType !== 0) return byType;
@@ -244,8 +246,7 @@ export default function AdminInventory() {
     const [subjectsRes, sessionRes, locationRes] = await Promise.all([
       supabase
         .from("subjects")
-        .select("id, name")
-        .order("name", { ascending: true }),
+        .select("id, name, active, store_visible, sort_order"),
       supabase.auth.getSession(),
       supabase
         .from("locations")
@@ -263,7 +264,9 @@ export default function AdminInventory() {
     }
 
     setItems(allItems);
-    setSubjects(subjectsRes.data || []);
+    setSubjects(
+      (subjectsRes.data || []).slice().sort((a, b) => compareSubjects(a, b)),
+    );
     setLocationId(locationRes.data?.id ?? null);
 
     const userId = sessionRes.data.session?.user.id;
@@ -665,6 +668,83 @@ export default function AdminInventory() {
         </div>
       )}
 
+      <details className="rounded-lg border p-4">
+        <summary className="cursor-pointer font-medium">
+          Store course visibility
+        </summary>
+        <p className="text-sm text-foreground/60 mt-2 mb-3">
+          Hide a course from the store without deleting it. Sort order overrides
+          the default Math, English, Word Building, Science, Social Studies, Electives sequence.
+        </p>
+        <div className="max-h-72 overflow-auto divide-y">
+          {subjects.map((subject) => (
+            <div key={subject.id} className="flex items-center gap-3 py-2 text-sm">
+              <span className="flex-1">{subjectDisplayName(subject.name)}</span>
+              <label className="flex items-center gap-1 text-xs">
+                <input
+                  type="checkbox"
+                  checked={subject.store_visible !== false}
+                  onChange={async (event) => {
+                    const store_visible = event.target.checked;
+                    const { error: updateError } = await supabase
+                      .from("subjects")
+                      .update({ store_visible })
+                      .eq("id", subject.id);
+                    if (updateError) {
+                      setError(updateError.message);
+                      return;
+                    }
+                    setSubjects((prev) =>
+                      prev.map((row) =>
+                        row.id === subject.id ? { ...row, store_visible } : row,
+                      ),
+                    );
+                  }}
+                />
+                In store
+              </label>
+              <label className="flex items-center gap-1 text-xs">
+                <input
+                  type="checkbox"
+                  checked={subject.active !== false}
+                  onChange={async (event) => {
+                    const active = event.target.checked;
+                    const { error: updateError } = await supabase
+                      .from("subjects")
+                      .update({ active })
+                      .eq("id", subject.id);
+                    if (updateError) {
+                      setError(updateError.message);
+                      return;
+                    }
+                    setSubjects((prev) =>
+                      prev.map((row) => (row.id === subject.id ? { ...row, active } : row)),
+                    );
+                  }}
+                />
+                Active
+              </label>
+              <Input
+                type="number"
+                className="w-20 h-8"
+                aria-label={`Sort order for ${subject.name}`}
+                value={subject.sort_order ?? ""}
+                onChange={(event) => {
+                  const sort_order = event.target.value === "" ? null : Number(event.target.value);
+                  setSubjects((prev) =>
+                    prev.map((row) => (row.id === subject.id ? { ...row, sort_order } : row)),
+                  );
+                }}
+                onBlur={async (event) => {
+                  const sort_order = event.target.value === "" ? null : Number(event.target.value);
+                  await supabase.from("subjects").update({ sort_order }).eq("id", subject.id);
+                }}
+              />
+            </div>
+          ))}
+        </div>
+      </details>
+
       {showAddForm && (
         <div className="rounded-lg border p-4 space-y-4">
           <h2 className="font-medium">New Item</h2>
@@ -970,7 +1050,7 @@ export default function AdminInventory() {
                           setDeleteError(null);
                         }}
                       >
-                        Delete
+                        Deactivate
                       </Button>
                     </>
                   )}
@@ -1011,11 +1091,12 @@ export default function AdminInventory() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Delete "{deleteTarget?.original_name}"?
+              Deactivate "{deleteTarget?.original_name}"?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              This permanently removes the item from inventory. This can't be
-              undone.
+              This hides the item from the store and pick lists. The row stays
+              in the database. Permanent delete is only for a row that was
+              created by mistake and is not on any order.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {deleteError && (
@@ -1034,15 +1115,28 @@ export default function AdminInventory() {
           )}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <Button
+              type="button"
+              variant="ghost"
+              className="text-destructive"
+              disabled={deleting}
+              onClick={() => {
+                const confirmed = window.confirm(
+                  `Permanently delete "${deleteTarget?.original_name}"? This cannot be undone.`,
+                );
+                if (confirmed) void confirmDelete();
+              }}
+            >
+              {deleting ? "Deleting…" : "Delete permanently"}
+            </Button>
             <AlertDialogAction
               onClick={(e) => {
                 e.preventDefault();
-                void confirmDelete();
+                void deactivateInsteadOfDelete();
               }}
               disabled={deleting}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {deleting ? "Deleting…" : "Delete"}
+              {deleting ? "Saving…" : "Deactivate"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

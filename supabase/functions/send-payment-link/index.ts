@@ -3,6 +3,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import Stripe from "npm:stripe@17.4.0";
 import { readPaymentMode, resolveStripeSecretKey } from "../_shared/paymentMode.ts";
 import { readEdgePaymentEnv } from "../_shared/readEdgeEnv.ts";
+import { renderTemplate, sendResendEmail } from "../_shared/emailTemplates.ts";
 
 // Admin-only. Converts an existing COMP (no-payment) enrollment into a real
 // paid Stripe subscription, without re-collecting any family/student info -
@@ -160,31 +161,29 @@ Deno.serve(async (req: Request) => {
       },
     });
 
-    const resendApiKey = Deno.env.get("RESEND_API_KEY");
-    if (resendApiKey && session.url) {
+    if (session.url) {
       const firstName = family.parent_name?.split(" ")[0] ?? "there";
-      await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${resendApiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          from: "Midwest Christian Academy <admin@mcahomeschool.com>",
-          reply_to: "david@midwestchristianacademy.com",
-          to: [family.email],
-          subject: `Set up payment for ${student.student_name}'s enrollment`,
-          html: `
-            <div style="font-family: Georgia, serif; color: #1a1a2e; max-width: 600px;">
+      const paymentEmail = await renderTemplate(admin, "payment_link", {
+        parent_first_name: firstName,
+        student_name: student.student_name,
+        frequency,
+        price: plan.price,
+        checkout_url: session.url,
+      }, {
+        subject: "Set up payment for {{student_name}}'s enrollment",
+        html: `<div style="font-family: Georgia, serif; color: #1a1a2e; max-width: 600px;">
               <h2>Time to set up payment</h2>
-              <p>Hi ${firstName},</p>
-              <p>${student.student_name}'s enrollment is ready to move to a paid plan - ${frequency}, $${plan.price}. Everything else stays exactly the same: their student record, your Parent Portal access, all of it. You just need to add a payment method.</p>
-              <p><a href="${session.url}" style="display:inline-block;background:#1a1a2e;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;">Set Up Payment</a></p>
+              <p>Hi {{parent_first_name}},</p>
+              <p>{{student_name}}'s enrollment is ready to move to a paid plan - {{frequency}}, ${"$"}{{price}}. Everything else stays exactly the same: their student record, your Parent Portal access, all of it. You just need to add a payment method.</p>
+              <p><a href="{{checkout_url}}" style="display:inline-block;background:#1a1a2e;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;">Set Up Payment</a></p>
               <p>Questions? Call us at (844) 663-4477 or reach out at david@midwestchristianacademy.com.</p>
-            </div>
-          `,
-        }),
-      }).catch((err) => console.error("Resend send failed", err));
+            </div>`,
+      });
+      await sendResendEmail({
+        to: family.email,
+        subject: paymentEmail.subject,
+        html: paymentEmail.html,
+      });
     }
 
     return new Response(

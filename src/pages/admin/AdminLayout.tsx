@@ -8,6 +8,7 @@ const AdminLayout = () => {
   const [checking, setChecking] = useState(true);
   const [session, setSession] = useState<any>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [pendingReviews, setPendingReviews] = useState(0);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -19,6 +20,13 @@ const AdminLayout = () => {
       if (session) {
         const { data } = await supabase.rpc("is_admin");
         setIsAdmin(!!data);
+        if (data) {
+          const pending = await supabase
+            .from("score_reports")
+            .select("id", { count: "exact", head: true })
+            .eq("review_status", "pending");
+          setPendingReviews(pending.count ?? 0);
+        }
       }
       setChecking(false);
     };
@@ -99,6 +107,15 @@ const AdminLayout = () => {
             </NavLink>
             <NavLink to={`${ADMIN_ROUTE}/pick-lists`} className={navLinkClass}>
               Pick Lists
+            </NavLink>
+            <NavLink to={`${ADMIN_ROUTE}/backorders`} className={navLinkClass}>
+              Backordered
+            </NavLink>
+            <NavLink to={`${ADMIN_ROUTE}/test-reviews`} className={navLinkClass}>
+              Test Reviews{pendingReviews > 0 ? ` (${pendingReviews})` : ""}
+            </NavLink>
+            <NavLink to={`${ADMIN_ROUTE}/emails`} className={navLinkClass}>
+              Email Templates
             </NavLink>
             <NavLink to={`${ADMIN_ROUTE}/enroll-comp`} className={navLinkClass}>
               Enroll Without Payment

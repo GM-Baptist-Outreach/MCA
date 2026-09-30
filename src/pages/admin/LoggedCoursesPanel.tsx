@@ -7,20 +7,30 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
 import {
   addDays,
   average,
+  buildCourseOptions,
+  compareSubjectNames,
+  courseOptionLabel,
   currentSchoolYear,
   isSlotCompleted,
   isoToday,
   nextSchoolYear,
-  paceRangeForLevel,
   reportLetter,
+  SUBJECT_GROUPS,
+  subjectDisplayName,
+  subjectGroup,
   suggestedFixedShipDates,
+  toAcePaceNumber,
+  type CourseCatalogItem,
+  type CourseOption,
 } from "@/lib/loggedCourses";
 
 const SUPABASE_URL = "https://proiyioqfbjcmprsnqhf.supabase.co";
@@ -112,15 +122,46 @@ export default function LoggedCoursesPanel({
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [slots, setSlots] = useState<Slot[]>([]);
   const [schedule, setSchedule] = useState<Schedule>(EMPTY_SCHEDULE(schoolYear));
-  const [subjectId, setSubjectId] = useState("");
-  const [level, setLevel] = useState("7");
+  const [courseItems, setCourseItems] = useState<CourseCatalogItem[]>([]);
+  const [courseKey, setCourseKey] = useState("");
+  const [level, setLevel] = useState("");
+  const [schoolStartDate, setSchoolStartDate] = useState("");
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
   const [draftScore, setDraftScore] = useState("");
   const [busy, setBusy] = useState(false);
 
   const load = async () => {
-    const [subjectRes, slotRes, scheduleRes] = await Promise.all([
-      supabase.from("subjects").select("id, name").eq("active", true).order("name"),
+    const catalog: CourseCatalogItem[] = [];
+    let from = 0;
+    while (from < 5000) {
+      const { data, error } = await supabase
+        .from("items")
+        .select("id, subject_id, item_type, pace_number, sales_price, subjects(name)")
+        .eq("active", true)
+        .in("item_type", ["pace", "other"])
+        .not("pace_number", "is", null)
+        .range(from, from + 999);
+      if (error || !data || data.length === 0) break;
+      for (const row of data) {
+        if (!row.subject_id || row.pace_number == null) continue;
+        const rel = row.subjects as { name: string } | { name: string }[] | null;
+        const subjectName = Array.isArray(rel) ? rel[0]?.name ?? "Subject" : rel?.name ?? "Subject";
+        catalog.push({
+          id: row.id,
+          subject_id: row.subject_id,
+          subject_name: subjectName,
+          item_type: row.item_type,
+          pace_number: row.pace_number,
+          sales_price: Number(row.sales_price ?? 0),
+        });
+      }
+      if (data.length < 1000) break;
+      from += 1000;
+    }
+    setCourseItems(catalog);
+
+    const [subjectRes, slotRes, scheduleRes, calendarRes] = await Promise.all([
+      supabase.from("subjects").select("id, name").eq("active", true),
       supabase
         .from("student_pace_slots")
         .select(
@@ -137,8 +178,18 @@ export default function LoggedCoursesPanel({
         .eq("student_id", studentId)
         .eq("school_year", schoolYear)
         .maybeSingle(),
+      supabase
+        .from("student_school_calendars")
+        .select("start_date")
+        .eq("student_id", studentId)
+        .eq("school_year", schoolYear)
+        .maybeSingle(),
     ]);
-    if (subjectRes.data) setSubjects(subjectRes.data);
+    if (subjectRes.data) {
+      setSubjects(
+        [...subjectRes.data].sort((a, b) => compareSubjectNames(a.name, b.name)),
+      );
+    }
     setSlots((slotRes.data ?? []) as Slot[]);
     if (scheduleRes.data) {
       const row = scheduleRes.data;
@@ -160,6 +211,7 @@ export default function LoggedCoursesPanel({
     } else {
       setSchedule(EMPTY_SCHEDULE(schoolYear));
     }
+    setSchoolStartDate(calendarRes.data?.start_date ?? "");
   };
 
   useEffect(() => {
@@ -176,7 +228,7 @@ export default function LoggedCoursesPanel({
     return [...map.entries()].sort((a, b) => {
       const an = subjects.find((s) => s.id === a[0])?.name ?? "";
       const bn = subjects.find((s) => s.id === b[0])?.name ?? "";
-      return an.localeCompare(bn);
+      return compareSubjectNames(an, bn);
     });
   }, [slots, subjects]);
 
@@ -191,91 +243,103 @@ export default function LoggedCoursesPanel({
     };
   }, [slots]);
 
+  const courseOptions = useMemo(
+    () => buildCourseOptions(courseItems),
+    [courseItems],
+  );
+  const selectedCourse: CourseOption | null =
+    courseOptions.elementary.find((course) => course.key === courseKey) ??
+    courseOptions.courses.find((course) => course.key === courseKey) ??
+    null;
+
   const prescribe = async () => {
-    if (!subjectId) return;
+    if (!selectedCourse) return;
+    const levelOption =
+      selectedCourse.kind === "level"
+        ? selectedCourse.levels.find((row) => String(row.level) === level)
+        : null;
+    const paces = levelOption ? levelOption.items : selectedCourse.items;
+    if (selectedCourse.kind === "level" && !levelOption) return;
     setBusy(true);
-    const levelNum = Number(level);
-    const { start } = paceRangeForLevel(levelNum);
-    const { data: catalog, error } = await supabase
-      .from("items")
-      .select("id, pace_number, grade_level")
-      .eq("subject_id", subjectId)
-      .eq("item_type", "pace")
-      .eq("active", true)
-      .gte("pace_number", start)
-      .lte("pace_number", start + 11)
-      .order("pace_number");
-    if (error) {
-      toast({ title: "Couldn't load PACEs", description: error.message, variant: "destructive" });
-      setBusy(false);
-      return;
+    const grouped = new Map<string, typeof paces>();
+    for (const pace of paces) {
+      const list = grouped.get(pace.subjectId) ?? [];
+      list.push(pace);
+      grouped.set(pace.subjectId, list);
     }
-    const byNumber = new Map<number, { id: string; grade_level: number | null }>();
-    for (const item of catalog ?? []) {
-      if (item.pace_number == null) continue;
-      const existing = byNumber.get(item.pace_number);
-      if (!existing || (item.grade_level === levelNum && existing.grade_level !== levelNum)) {
-        byNumber.set(item.pace_number, item);
+    let saved = 0;
+    for (const [subjectId, list] of grouped) {
+      const rows = [...list]
+        .sort((a, b) => a.paceNumber - b.paceNumber)
+        .map((pace, index) => ({
+          student_id: studentId,
+          subject_id: subjectId,
+          school_year: schoolYear,
+          slot_index: index + 1,
+          pace_number: pace.paceNumber,
+          item_id: pace.id,
+          status: "prescribed",
+        }));
+      const locked = slots.filter(
+        (slot) =>
+          slot.subject_id === subjectId &&
+          !["prescribed", "paused"].includes(slot.status),
+      );
+      const lockedIndexes = new Set(locked.map((slot) => slot.slot_index));
+      const writable = rows.filter((row) => !lockedIndexes.has(row.slot_index));
+      if (writable.length > 0) {
+        const { error: upsertError } = await supabase
+          .from("student_pace_slots")
+          .upsert(writable, {
+            onConflict: "student_id,subject_id,school_year,slot_index",
+          });
+        if (upsertError) {
+          toast({ title: "Couldn't prescribe", description: upsertError.message, variant: "destructive" });
+          setBusy(false);
+          return;
+        }
+        saved += writable.length;
       }
+      await supabase.from("required_pace_plans").upsert(
+        {
+          student_id: studentId,
+          subject_id: subjectId,
+          school_year: schoolYear,
+          required_count: rows.length,
+        },
+        { onConflict: "student_id,subject_id,school_year" },
+      );
     }
-    const rows = [...byNumber.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .slice(0, 12)
-      .map(([paceNumber, item], index) => ({
-        student_id: studentId,
-        subject_id: subjectId,
-        school_year: schoolYear,
-        slot_index: index + 1,
-        pace_number: paceNumber,
-        item_id: item.id,
-        status: "prescribed",
-      }));
-    if (rows.length === 0) {
-      toast({
-        title: "Nothing to prescribe",
-        description: "No active PACEs in that level for this subject.",
-        variant: "destructive",
-      });
-      setBusy(false);
-      return;
-    }
-    const locked = slots.filter(
-      (slot) =>
-        slot.subject_id === subjectId &&
-        !["prescribed", "paused"].includes(slot.status),
-    );
-    if (locked.length > 0) {
-      toast({
-        title: "Some boxes are already issued",
-        description: "Issued, scored, ordered, or in-stock boxes were left in place. Only open slots were rewritten.",
-      });
-    }
-    const lockedIndexes = new Set(locked.map((slot) => slot.slot_index));
-    const writable = rows.filter((row) => !lockedIndexes.has(row.slot_index));
-    if (writable.length > 0) {
-      const { error: upsertError } = await supabase
-        .from("student_pace_slots")
-        .upsert(writable, {
-          onConflict: "student_id,subject_id,school_year,slot_index",
-        });
-      if (upsertError) {
-        toast({ title: "Couldn't prescribe", description: upsertError.message, variant: "destructive" });
-        setBusy(false);
-        return;
-      }
-    }
-    await supabase.from("required_pace_plans").upsert(
-      {
-        student_id: studentId,
-        subject_id: subjectId,
-        school_year: schoolYear,
-        required_count: 12,
-      },
-      { onConflict: "student_id,subject_id,school_year" },
-    );
-    toast({ title: "Course prescribed", description: `${writable.length} PACE boxes saved for ${studentName}.` });
+    toast({
+      title: "Course prescribed",
+      description: `${saved} PACE boxes saved for ${studentName}.`,
+    });
     setBusy(false);
     load();
+  };
+
+  const saveSchoolStartDate = async () => {
+    if (!schoolStartDate) return;
+    setBusy(true);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const { error } = await supabase.from("student_school_calendars").upsert(
+      {
+        student_id: studentId,
+        school_year: schoolYear,
+        start_date: schoolStartDate,
+        updated_by: user?.id ?? null,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "student_id,school_year" },
+    );
+    if (error) {
+      toast({ title: "Couldn't save the start date", description: error.message, variant: "destructive" });
+    } else {
+      toast({ title: "School start date saved" });
+    }
+    setBusy(false);
   };
 
   const saveSchedule = async () => {
@@ -434,37 +498,74 @@ export default function LoggedCoursesPanel({
 
       <div className="flex flex-wrap gap-2 items-end">
         <div className="space-y-1">
-          <Label className="text-xs">Subject</Label>
-          <Select value={subjectId} onValueChange={setSubjectId}>
-            <SelectTrigger className="bg-background w-52 h-9">
-              <SelectValue placeholder="Subject" />
+          <Label className="text-xs">Course</Label>
+          <Select
+            value={courseKey}
+            onValueChange={(value) => {
+              setCourseKey(value);
+              const course =
+                courseOptions.elementary.find((row) => row.key === value) ??
+                courseOptions.courses.find((row) => row.key === value);
+              setLevel(course?.levels[0] ? String(course.levels[0].level) : "");
+            }}
+          >
+            <SelectTrigger className="bg-background w-72 h-9">
+              <SelectValue placeholder="Course" />
             </SelectTrigger>
             <SelectContent>
-              {subjects.map((subject) => (
-                <SelectItem key={subject.id} value={subject.id}>
-                  {subject.name}
-                </SelectItem>
-              ))}
+              {courseOptions.elementary.length > 0 && (
+                <SelectGroup>
+                  <SelectLabel>Elementary</SelectLabel>
+                  {courseOptions.elementary.map((course) => (
+                    <SelectItem key={course.key} value={course.key}>
+                      {course.displayName}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              )}
+              {SUBJECT_GROUPS.map((group) => {
+                const groupCourses = courseOptions.courses.filter(
+                  (course) =>
+                    (subjectGroup(course.subjectNames[0] ?? "") ?? "Electives") === group,
+                );
+                if (groupCourses.length === 0) return null;
+                return (
+                  <SelectGroup key={group}>
+                    <SelectLabel>{group}</SelectLabel>
+                    {groupCourses.map((course) => (
+                      <SelectItem key={course.key} value={course.key}>
+                        {courseOptionLabel(course)}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                );
+              })}
             </SelectContent>
           </Select>
         </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Level</Label>
-          <Select value={level} onValueChange={setLevel}>
-            <SelectTrigger className="bg-background w-28 h-9">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {Array.from({ length: 12 }, (_, i) => String(i + 1)).map((value) => (
-                <SelectItem key={value} value={value}>
-                  Level {value}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <Button size="sm" onClick={prescribe} disabled={busy || !subjectId}>
-          Prescribe 12
+        {selectedCourse?.kind === "level" && (
+          <div className="space-y-1">
+            <Label className="text-xs">Level</Label>
+            <Select value={level} onValueChange={setLevel}>
+              <SelectTrigger className="bg-background w-64 h-9">
+                <SelectValue placeholder="Level" />
+              </SelectTrigger>
+              <SelectContent>
+                {selectedCourse.levels.map((row) => (
+                  <SelectItem key={row.level} value={String(row.level)}>
+                    {courseOptionLabel(selectedCourse, row)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+        <Button
+          size="sm"
+          onClick={prescribe}
+          disabled={busy || !selectedCourse || (selectedCourse.kind === "level" && !level)}
+        >
+          Prescribe
         </Button>
       </div>
 
@@ -484,7 +585,7 @@ export default function LoggedCoursesPanel({
             return (
             <div key={id} className="min-w-[760px]">
               <p className="text-sm font-medium mb-1">
-                {subjects.find((subject) => subject.id === id)?.name ?? "Subject"}
+                {subjectDisplayName(subjects.find((subject) => subject.id === id)?.name ?? "Subject")}
                 <span className="ml-2 font-normal text-foreground/70">
                   Avg {subjectAverage != null ? `${subjectAverage.toFixed(1)}%` : "n/a"} | Completed{" "}
                   {completed} | Remaining {subjectSlots.length - completed}
@@ -511,7 +612,7 @@ export default function LoggedCoursesPanel({
                       }`}
                     >
                       <div className={highlighted ? "bg-amber-200 font-semibold" : "bg-secondary/50"}>
-                        {slot?.pace_number ?? "·"}
+                        {slot ? toAcePaceNumber(slot.pace_number) : "·"}
                       </div>
                       <div
                         className={
@@ -537,7 +638,7 @@ export default function LoggedCoursesPanel({
       {selected && (
         <div className="flex flex-wrap gap-2 items-end rounded-lg border border-border/60 p-3">
           <p className="text-sm w-full">
-            PACE {selected.pace_number} · {selected.status}
+            PACE {toAcePaceNumber(selected.pace_number)} · {selected.status}
           </p>
           <Select
             value={selected.status}
@@ -587,6 +688,19 @@ export default function LoggedCoursesPanel({
 
       <div className="grid sm:grid-cols-2 gap-3 rounded-lg border border-border/60 p-3">
         <div className="space-y-2">
+          <Label className="text-xs">School start date</Label>
+          <div className="flex gap-2">
+            <Input
+              type="date"
+              value={schoolStartDate}
+              onChange={(event) => setSchoolStartDate(event.target.value)}
+              className="bg-background h-9"
+              aria-label="School start date"
+            />
+            <Button size="sm" variant="outline" disabled={busy || !schoolStartDate} onClick={saveSchoolStartDate}>
+              Save
+            </Button>
+          </div>
           <Label className="text-xs">Ship mode</Label>
           <Select
             value={schedule.mode}

@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { PORTAL_LOGIN_URL, renderTemplate, sendResendEmail } from "../_shared/emailTemplates.ts";
 
 // Admin-only. Enrolls a family with NO Stripe checkout at all - a
 // scholarship, a staff family, a pilot spot, whatever the reason. It
@@ -30,9 +31,6 @@ const GHL_OPP_FIELD_TUITION_TIER = "jGT3VSQNSFDgcpE4Uv6A";
 const GHL_OPP_FIELD_PAYMENT_PLAN = "u9d6ZZsIM2lmFKc7HAh3";
 
 const COMP_REASONS = ["financial_hardship", "staff_family", "scholarship", "pilot", "other"];
-
-const MCA_FROM_EMAIL = "Midwest Christian Academy <admin@mcahomeschool.com>";
-const MCA_REPLY_TO_EMAIL = "david@midwestchristianacademy.com";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -150,7 +148,6 @@ Deno.serve(async (req: Request) => {
 
     const ghlApiKey = Deno.env.get("GHL_API_KEY_MCA");
     const ghlLocationId = Deno.env.get("GHL_LOCATION_ID_MCA");
-    const resendApiKey = Deno.env.get("RESEND_API_KEY");
 
     async function ghlFetch(path: string, body: unknown) {
       if (!ghlApiKey || !ghlLocationId) return null;
@@ -230,27 +227,6 @@ Deno.serve(async (req: Request) => {
 
       console.error("GHL /contacts/ failed", res.status, JSON.stringify(errorBody));
       return null;
-    }
-
-    async function sendEmail(to: string, subject: string, html: string) {
-      if (!resendApiKey || !to) return;
-      const res = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${resendApiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          from: MCA_FROM_EMAIL,
-          reply_to: MCA_REPLY_TO_EMAIL,
-          to: [to],
-          subject,
-          html,
-        }),
-      });
-      if (!res.ok) {
-        console.error("Resend send failed", res.status, await res.text());
-      }
     }
 
     const studentsInfoText = students.map((s: any, i: number) =>
@@ -383,18 +359,27 @@ Deno.serve(async (req: Request) => {
     const summaryHtml = createdStudents
       .map((s) => `<li>${escapeHtml(s.name)}${s.tier ? ` - ${s.tier === "high_school" ? "High School" : "Elementary"}` : " - Kindergarten"}</li>`)
       .join("");
-    await sendEmail(
-      parent.email,
-      isReturningFamily ? "A new enrollment has been added to your account" : "Welcome to Midwest Christian Academy!",
-      `
-        <div style="font-family: Georgia, serif; color: #1a1a2e; max-width: 600px;">
+    const welcomeKey = isReturningFamily ? "enrollment_added_comp" : "welcome_comp";
+    const welcomeEmail = await renderTemplate(admin, welcomeKey, {
+      student_list: `<ul>${summaryHtml}</ul>`,
+      portal_url: PORTAL_LOGIN_URL,
+    }, {
+      subject: isReturningFamily
+        ? "A new enrollment has been added to your account"
+        : "Welcome to Midwest Christian Academy!",
+      html: `<div style="font-family: Georgia, serif; color: #1a1a2e; max-width: 600px;">
           <h2>${isReturningFamily ? "Enrollment Added" : "Enrollment Confirmed"}</h2>
           <p>Thank you for joining Midwest Christian Academy. Here's a summary:</p>
-          <ul>${summaryHtml}</ul>
+          {{student_list}}
+          <p>Sign in to the Parent Portal any time: <a href="{{portal_url}}">{{portal_url}}</a></p>
           <p>If you have any questions, reach out to david@midwestchristianacademy.com or call (844) 663-4477.</p>
-        </div>
-      `
-    );
+        </div>`,
+    });
+    await sendResendEmail({
+      to: parent.email,
+      subject: welcomeEmail.subject,
+      html: welcomeEmail.html,
+    });
 
     return new Response(
       JSON.stringify({ success: true, family_id: family.id, students: createdStudents }),
