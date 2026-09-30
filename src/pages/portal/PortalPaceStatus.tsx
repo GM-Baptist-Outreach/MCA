@@ -10,78 +10,87 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { currentSchoolYear, reportLetter } from "@/lib/loggedCourses";
+import { currentSchoolYear } from "@/lib/loggedCourses";
+import {
+  SUBJECT_GROUPS,
+  subjectGroup,
+  type SubjectGroup,
+} from "@/lib/subjectGroups";
 import type { PortalContext } from "./PortalLayout";
-
-// Passing threshold for a PACE score.
-const PASSING_THRESHOLD = 80;
 
 interface Subject {
   id: string;
   name: string;
 }
 
-interface Item {
-  id: string;
-  pace_number: number;
-  original_name: string;
-}
-
-interface ScoreReport {
-  pace_number: number;
-  score: string | null;
-}
-
-interface PaceStatusRow {
-  item_id: string;
-  status: "ordered" | "in_stock" | "issued";
-}
-
-interface PrescribedSlot {
+interface PaceSlotRow {
   id: string;
   slot_index: number;
   pace_number: number;
   item_id: string | null;
   status: string;
   score: number | null;
-  completed_at: string | null;
-  issued_at: string | null;
+  subject_id: string;
+  subjectName: string;
+  itemName: string;
 }
 
-type ComputedStatus =
-  "not_started" | "ordered" | "in_stock" | "issued" | "passed" | "failed";
+type StoredStatus = "ordered" | "in_stock" | "issued";
+type DisplayStatus = "prescribed" | "received" | "issued" | "completed" | "paused";
 
-const STATUS_LABELS: Record<ComputedStatus, string> = {
-  not_started: "Not Started",
-  ordered: "Ordered",
-  in_stock: "In Stock",
+const DISPLAY_LABELS: Record<DisplayStatus, string> = {
+  prescribed: "Prescribed",
+  received: "Received",
   issued: "Issued",
-  passed: "Passed",
-  failed: "Failed",
+  completed: "Completed",
+  paused: "Paused",
 };
 
-const STATUS_COLORS: Record<ComputedStatus, string> = {
-  not_started: "bg-secondary text-foreground/50",
-  ordered: "bg-blue-500/10 text-blue-700",
-  in_stock: "bg-yellow-500/10 text-yellow-700",
+const DISPLAY_COLORS: Record<DisplayStatus, string> = {
+  prescribed: "bg-secondary text-foreground/70",
+  received: "bg-yellow-500/10 text-yellow-700",
   issued: "bg-purple-500/10 text-purple-700",
-  passed: "bg-green-500/10 text-green-700",
-  failed: "bg-destructive/10 text-destructive",
+  completed: "bg-green-500/10 text-green-700",
+  paused: "bg-amber-500/10 text-amber-800",
 };
+
+function relName(
+  rel: { name?: string; original_name?: string } | { name?: string; original_name?: string }[] | null,
+  key: "name" | "original_name",
+): string {
+  if (!rel) return "";
+  const row = Array.isArray(rel) ? rel[0] : rel;
+  return row?.[key] ?? "";
+}
+
+function displayStatus(slot: PaceSlotRow): DisplayStatus {
+  if (slot.score != null || slot.status === "passed" || slot.status === "failed") {
+    return "completed";
+  }
+  if (slot.status === "in_stock") return "received";
+  if (slot.status === "issued") return "issued";
+  if (slot.status === "paused") return "paused";
+  return "prescribed";
+}
+
+function storedSelectValue(slot: PaceSlotRow): string {
+  if (slot.status === "in_stock") return "in_stock";
+  if (slot.status === "issued") return "issued";
+  if (slot.status === "ordered" || slot.status === "prescribed") return "ordered";
+  return "";
+}
 
 export default function PortalPaceStatus() {
   const { selectedStudent } = useOutletContext<PortalContext>();
   const { toast } = useToast();
 
   const [subjects, setSubjects] = useState<Subject[]>([]);
-  const [subjectId, setSubjectId] = useState("");
-  const [items, setItems] = useState<Item[]>([]);
-  const [scores, setScores] = useState<ScoreReport[]>([]);
-  const [statuses, setStatuses] = useState<PaceStatusRow[]>([]);
-  const [slots, setSlots] = useState<PrescribedSlot[]>([]);
+  const [group, setGroup] = useState<SubjectGroup | "">("");
+  const [electiveSubjectId, setElectiveSubjectId] = useState("");
+  const [slots, setSlots] = useState<PaceSlotRow[]>([]);
   const [schoolYear, setSchoolYear] = useState(currentSchoolYear());
   const [loading, setLoading] = useState(false);
-  const [savingItemId, setSavingItemId] = useState<string | null>(null);
+  const [savingSlotId, setSavingSlotId] = useState<string | null>(null);
 
   useEffect(() => {
     supabase
@@ -95,77 +104,95 @@ export default function PortalPaceStatus() {
   }, []);
 
   useEffect(() => {
-    if (!subjectId || !selectedStudent) {
-      setItems([]);
-      setScores([]);
-      setStatuses([]);
+    if (!selectedStudent) {
       setSlots([]);
       return;
     }
+    let ignore = false;
     const load = async () => {
       setLoading(true);
-      const [itemsRes, scoresRes, statusRes, slotRes] = await Promise.all([
-        supabase
-          .from("items")
-          .select("id, pace_number, original_name")
-          .eq("subject_id", subjectId)
-          .eq("item_type", "pace")
-          .order("pace_number"),
-        supabase
-          .from("score_reports")
-          .select("pace_number, score")
-          .eq("student_id", selectedStudent.id)
-          .eq("subject_id", subjectId),
-        supabase
-          .from("pace_status")
-          .select("item_id, status")
-          .eq("student_id", selectedStudent.id),
-        supabase
-          .from("student_pace_slots")
-          .select(
-            "id, slot_index, pace_number, item_id, status, score, completed_at, issued_at",
-          )
-          .eq("student_id", selectedStudent.id)
-          .eq("subject_id", subjectId)
-          .eq("school_year", schoolYear)
-          .order("slot_index"),
-      ]);
-      if (itemsRes.data) setItems(itemsRes.data);
-      if (scoresRes.data) setScores(scoresRes.data);
-      if (statusRes.data) setStatuses(statusRes.data);
-      setSlots((slotRes.data ?? []) as PrescribedSlot[]);
+      const { data, error } = await supabase
+        .from("student_pace_slots")
+        .select(
+          "id, slot_index, pace_number, item_id, status, score, subject_id, subjects(name), items(original_name)",
+        )
+        .eq("student_id", selectedStudent.id)
+        .eq("school_year", schoolYear)
+        .order("slot_index");
+      if (ignore) return;
+      if (error) {
+        toast({
+          title: "Couldn't load PACE status",
+          description: error.message,
+          variant: "destructive",
+        });
+        setSlots([]);
+      } else {
+        setSlots(
+          (data ?? []).map((row) => ({
+            id: row.id,
+            slot_index: row.slot_index,
+            pace_number: row.pace_number,
+            item_id: row.item_id,
+            status: row.status,
+            score: row.score,
+            subject_id: row.subject_id,
+            subjectName: relName(
+              row.subjects as { name: string } | { name: string }[] | null,
+              "name",
+            ) || "Subject",
+            itemName: relName(
+              row.items as { original_name: string } | { original_name: string }[] | null,
+              "original_name",
+            ),
+          })),
+        );
+      }
       setLoading(false);
     };
     load();
-  }, [subjectId, selectedStudent?.id, schoolYear]);
+    return () => {
+      ignore = true;
+    };
+  }, [selectedStudent?.id, schoolYear, toast]);
 
-  const computeStatus = (
-    item: Item,
-  ): { status: ComputedStatus; detail?: string } => {
-    const score = scores.find((s) => s.pace_number === item.pace_number);
-    if (score && score.score != null) {
-      const num = parseFloat(score.score);
-      return {
-        status: num >= PASSING_THRESHOLD ? "passed" : "failed",
-        detail: `${score.score}%`,
-      };
+  const electiveOptions = useMemo(() => {
+    const fromSlots = new Map<string, string>();
+    for (const slot of slots) {
+      if (subjectGroup(slot.subjectName) === "Electives") {
+        fromSlots.set(slot.subject_id, slot.subjectName);
+      }
     }
-    const statusRow = statuses.find((s) => s.item_id === item.id);
-    if (statusRow) return { status: statusRow.status };
-    return { status: "not_started" };
-  };
+    const source =
+      fromSlots.size > 0
+        ? [...fromSlots.entries()].map(([id, name]) => ({ id, name }))
+        : subjects.filter((subject) => subjectGroup(subject.name) === "Electives");
+    return [...source].sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { numeric: true }),
+    );
+  }, [slots, subjects]);
 
-  const setItemStatus = async (
-    item: Item,
-    newStatus: "ordered" | "in_stock" | "issued",
-  ) => {
-    if (!selectedStudent) return;
-    setSavingItemId(item.id);
+  const rows = useMemo(() => {
+    if (!group) return [];
+    return slots
+      .filter((slot) => {
+        if (group === "Electives") return slot.subject_id === electiveSubjectId;
+        return subjectGroup(slot.subjectName) === group;
+      })
+      .sort(
+        (a, b) =>
+          a.subjectName.localeCompare(b.subjectName, undefined, { numeric: true }) ||
+          a.slot_index - b.slot_index,
+      );
+  }, [slots, group, electiveSubjectId]);
 
+  const setSlotStatus = async (slot: PaceSlotRow, newStatus: StoredStatus) => {
+    if (!selectedStudent || !slot.item_id) return;
+    setSavingSlotId(slot.id);
     const { error } = await supabase.from("pace_status").upsert(
       {
         student_id: selectedStudent.id,
-        item_id: item.id,
+        item_id: slot.item_id,
         status: newStatus,
         status_date: new Date().toISOString().slice(0, 10),
         updated_at: new Date().toISOString(),
@@ -180,36 +207,19 @@ export default function PortalPaceStatus() {
         variant: "destructive",
       });
     } else {
-      setStatuses((prev) => {
-        const without = prev.filter((s) => s.item_id !== item.id);
-        return [...without, { item_id: item.id, status: newStatus }];
-      });
-      // The database trigger copies this onto the matching prescribed slot
-      // unless that slot is already passed or failed.
       setSlots((prev) =>
-        prev.map((slot) =>
-          slot.item_id === item.id &&
-          slot.status !== "passed" &&
-          slot.status !== "failed"
+        prev.map((row) =>
+          row.id === slot.id && row.status !== "passed" && row.status !== "failed"
             ? {
-                ...slot,
+                ...row,
                 status: newStatus,
-                issued_at:
-                  newStatus === "issued"
-                    ? slot.issued_at ?? new Date().toISOString().slice(0, 10)
-                    : slot.issued_at,
               }
-            : slot,
+            : row,
         ),
       );
     }
-    setSavingItemId(null);
+    setSavingSlotId(null);
   };
-
-  const rows = useMemo(
-    () => items.map((item) => ({ item, ...computeStatus(item) })),
-    [items, scores, statuses],
-  );
 
   if (!selectedStudent) {
     return (
@@ -219,6 +229,8 @@ export default function PortalPaceStatus() {
     );
   }
 
+  const showTable = group !== "" && (group !== "Electives" || electiveSubjectId !== "");
+
   return (
     <div className="space-y-6">
       <div>
@@ -226,25 +238,46 @@ export default function PortalPaceStatus() {
           PACE Status
         </h2>
         <p className="text-sm text-foreground/60">
-          {selectedStudent.student_name}. ACE remains the official grade
-          record. Scores here are the ones parents submit. Ordered, in stock,
-          and issued come from PACE status and copy onto the prescribed boxes.
+          {selectedStudent.student_name}. This table is the PACEs prescribed
+          for {schoolYear}. Prescribed covers a prescribed or ordered PACE.
+          Received means it is in stock. Issued means it was issued. Completed
+          means it passed, failed, or already has a score.
         </p>
       </div>
 
       <div className="flex items-end gap-3 flex-wrap">
-        <Select value={subjectId} onValueChange={setSubjectId}>
-          <SelectTrigger className="bg-background w-64">
+        <Select
+          value={group}
+          onValueChange={(value) => {
+            setGroup(value as SubjectGroup);
+            setElectiveSubjectId("");
+          }}
+        >
+          <SelectTrigger className="bg-background w-64" aria-label="Subject group">
             <SelectValue placeholder="Select a subject" />
           </SelectTrigger>
           <SelectContent>
-            {subjects.map((s) => (
-              <SelectItem key={s.id} value={s.id}>
-                {s.name}
+            {SUBJECT_GROUPS.map((name) => (
+              <SelectItem key={name} value={name}>
+                {name}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
+        {group === "Electives" && (
+          <Select value={electiveSubjectId} onValueChange={setElectiveSubjectId}>
+            <SelectTrigger className="bg-background w-64" aria-label="Elective">
+              <SelectValue placeholder="Select an elective" />
+            </SelectTrigger>
+            <SelectContent>
+              {electiveOptions.map((subject) => (
+                <SelectItem key={subject.id} value={subject.id}>
+                  {subject.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
         <div className="space-y-1">
           <p className="text-xs text-foreground/50">School year</p>
           <Input
@@ -256,80 +289,25 @@ export default function PortalPaceStatus() {
         </div>
       </div>
 
-      {subjectId && (
-        <div className="space-y-2">
-          <p className="text-xs uppercase tracking-wide text-foreground/50">
-            Prescribed boxes
-          </p>
-          {slots.length === 0 ? (
-            <p className="text-sm text-foreground/60">
-              No 12-box prescription for this subject in {schoolYear}. Staff
-              prescribe it on the family record. The list below is still the
-              full catalog with score reports and PACE status.
-            </p>
-          ) : (
-            <div className="grid grid-cols-6 sm:grid-cols-12 gap-1">
-              {Array.from({ length: 12 }, (_, index) => {
-                const slot = slots.find((row) => row.slot_index === index + 1);
-                const reported = slot
-                  ? scores.find((score) => score.pace_number === slot.pace_number)
-                  : undefined;
-                const reportedScore =
-                  reported?.score != null ? parseFloat(reported.score) : null;
-                const score =
-                  slot?.score ??
-                  (reportedScore != null && !Number.isNaN(reportedScore)
-                    ? reportedScore
-                    : null);
-                const letter = slot ? reportLetter(slot.status, score) : "";
-                const highlighted =
-                  slot &&
-                  ["issued", "passed", "failed"].includes(slot.status);
-                return (
-                  <div
-                    key={index}
-                    className="h-14 border border-primary/30 rounded-sm text-center text-xs overflow-hidden"
-                  >
-                    <div
-                      className={
-                        highlighted
-                          ? "bg-amber-200 font-semibold leading-5"
-                          : "bg-secondary/60 leading-5"
-                      }
-                    >
-                      {slot?.pace_number ?? "·"}
-                      {letter ? ` ${letter}` : ""}
-                    </div>
-                    <div
-                      className={
-                        letter === "P"
-                          ? "text-green-700 font-semibold leading-8"
-                          : letter === "F"
-                            ? "text-red-700 font-semibold leading-8"
-                            : "text-foreground/50 leading-8"
-                      }
-                    >
-                      {score ?? ""}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-
       {loading ? (
         <p className="text-foreground/60">Loading...</p>
-      ) : !subjectId ? (
-        <p className="text-foreground/60">Pick a subject to see PACE status.</p>
+      ) : !showTable ? (
+        <p className="text-foreground/60">
+          {group === "Electives"
+            ? "Pick an elective to see this year's PACEs."
+            : "Pick a subject to see PACE status."}
+        </p>
       ) : rows.length === 0 ? (
-        <p className="text-foreground/60">No PACEs found for this subject.</p>
+        <p className="text-foreground/60">
+          No prescribed PACEs for this subject in {schoolYear}.
+        </p>
       ) : (
         <div className="rounded-xl border border-border/50 overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-secondary text-left">
               <tr>
+                <th className="p-3">Subject</th>
+                <th className="p-3">Slot</th>
                 <th className="p-3">PACE #</th>
                 <th className="p-3">Item</th>
                 <th className="p-3">Status</th>
@@ -337,46 +315,47 @@ export default function PortalPaceStatus() {
               </tr>
             </thead>
             <tbody>
-              {rows.map(({ item, status, detail }) => (
-                <tr key={item.id} className="border-t border-border/50">
-                  <td className="p-3">{item.pace_number}</td>
-                  <td className="p-3">{item.original_name}</td>
-                  <td className="p-3">
-                    <span
-                      className={`text-xs font-medium px-2 py-1 rounded-full ${STATUS_COLORS[status]}`}
-                    >
-                      {STATUS_LABELS[status]}
-                      {detail ? ` — ${detail}` : ""}
-                    </span>
-                  </td>
-                  <td className="p-3">
-                    {(status === "not_started" ||
-                      status === "ordered" ||
-                      status === "in_stock" ||
-                      status === "issued") && (
-                      <Select
-                        value={status === "not_started" ? "" : status}
-                        onValueChange={(v) =>
-                          setItemStatus(
-                            item,
-                            v as "ordered" | "in_stock" | "issued",
-                          )
-                        }
-                        disabled={savingItemId === item.id}
+              {rows.map((slot) => {
+                const label = displayStatus(slot);
+                const canWrite =
+                  label !== "completed" && slot.item_id != null;
+                return (
+                  <tr key={slot.id} className="border-t border-border/50">
+                    <td className="p-3">{slot.subjectName}</td>
+                    <td className="p-3">{slot.slot_index}</td>
+                    <td className="p-3">{slot.pace_number}</td>
+                    <td className="p-3">{slot.itemName}</td>
+                    <td className="p-3">
+                      <span
+                        className={`text-xs font-medium px-2 py-1 rounded-full ${DISPLAY_COLORS[label]}`}
                       >
-                        <SelectTrigger className="bg-background h-8 w-32 text-xs">
-                          <SelectValue placeholder="Set status" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="ordered">Ordered</SelectItem>
-                          <SelectItem value="in_stock">In Stock</SelectItem>
-                          <SelectItem value="issued">Issued</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    )}
-                  </td>
-                </tr>
-              ))}
+                        {DISPLAY_LABELS[label]}
+                        {slot.score != null ? ` ${slot.score}` : ""}
+                      </span>
+                    </td>
+                    <td className="p-3">
+                      {canWrite && (
+                        <Select
+                          value={storedSelectValue(slot) || undefined}
+                          onValueChange={(value) =>
+                            setSlotStatus(slot, value as StoredStatus)
+                          }
+                          disabled={savingSlotId === slot.id}
+                        >
+                          <SelectTrigger className="bg-background h-8 w-36 text-xs">
+                            <SelectValue placeholder="Set status" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="ordered">Prescribed</SelectItem>
+                            <SelectItem value="in_stock">Received</SelectItem>
+                            <SelectItem value="issued">Issued</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

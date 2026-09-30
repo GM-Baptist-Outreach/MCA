@@ -168,7 +168,7 @@ const PortalLayout = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b border-border/50 bg-secondary/50">
+      <header className="border-b border-border/50 bg-secondary/50 print:hidden">
         <div className="max-w-5xl mx-auto px-4 py-4 space-y-3">
           <div className="flex items-center justify-between flex-wrap gap-3">
             <h1 className="text-xl font-bold font-serif text-primary">
@@ -179,7 +179,7 @@ const PortalLayout = () => {
                 Home
               </NavLink>
               <NavLink to={`${PORTAL_ROUTE}/progress`} className={navLinkClass}>
-                Progress
+                Upload Tests
               </NavLink>
               <NavLink
                 to={`${PORTAL_ROUTE}/pace-status`}

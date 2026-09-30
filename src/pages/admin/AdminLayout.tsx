@@ -70,7 +70,7 @@ const AdminLayout = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b border-border/50 bg-secondary/50">
+      <header className="border-b border-border/50 bg-secondary/50 print:hidden">
         <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
           <h1 className="text-xl font-bold font-serif text-primary">
             MCA Admin
@@ -92,7 +92,7 @@ const AdminLayout = () => {
               Admin Users
             </NavLink>
             <NavLink to={`${ADMIN_ROUTE}/settings`} className={navLinkClass}>
-              Payments
+              Payment Mode (Test/Live)
             </NavLink>
             <NavLink to={`${ADMIN_ROUTE}/families`} className={navLinkClass}>
               Families

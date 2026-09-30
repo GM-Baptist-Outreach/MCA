@@ -12,10 +12,50 @@ type Day = (typeof DAYS)[number];
 const WEEK_COUNT = 9; // one quarter, matching the Music Practice form's structure
 const WEEKLY_TARGET_MINUTES = 120; // 2 hours/week required for credit
 
-type WeekData = Record<Day, boolean>;
+interface DayEntry {
+  checked: boolean;
+  activity: string;
+}
+
+type WeekData = Record<Day, DayEntry>;
 
 function emptyWeek(): WeekData {
-  return DAYS.reduce((acc, d) => ({ ...acc, [d]: false }), {} as WeekData);
+  return DAYS.reduce(
+    (acc, d) => ({ ...acc, [d]: { checked: false, activity: "" } }),
+    {} as WeekData,
+  );
+}
+
+function normalizeWeek(raw: unknown): WeekData {
+  const row = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  return DAYS.reduce((acc, day) => {
+    const value = row[day];
+    if (typeof value === "boolean") {
+      acc[day] = { checked: value, activity: "" };
+    } else if (value && typeof value === "object") {
+      const entry = value as { checked?: boolean; activity?: string };
+      acc[day] = {
+        checked: !!entry.checked,
+        activity: typeof entry.activity === "string" ? entry.activity : "",
+      };
+    } else {
+      acc[day] = { checked: false, activity: "" };
+    }
+    return acc;
+  }, {} as WeekData);
+}
+
+function normalizeWeeks(raw: unknown): WeekData[] {
+  const source = Array.isArray(raw) ? raw : [];
+  return Array.from({ length: WEEK_COUNT }, (_, index) => normalizeWeek(source[index]));
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 export default function PortalPeLog() {
@@ -55,14 +95,11 @@ export default function PortalPeLog() {
       if (data) {
         setExistingSubmissionId(data.id);
         setSchoolYear(data.submitted_data.school_year ?? "");
-        setWeeks(
-          data.submitted_data.weeks ??
-            Array.from({ length: WEEK_COUNT }, emptyWeek),
-        );
+        setWeeks(normalizeWeeks(data.submitted_data.weeks));
         setVerification(data.submitted_data.verification ?? "");
       } else {
         setExistingSubmissionId(null);
-        setWeeks(Array.from({ length: WEEK_COUNT }, emptyWeek));
+        setWeeks(normalizeWeeks(null));
         setVerification("");
       }
       setLoading(false);
@@ -76,16 +113,25 @@ export default function PortalPeLog() {
   const toggleDay = (weekIdx: number, day: Day) => {
     setWeeks((w) =>
       w.map((week, i) =>
-        i === weekIdx ? { ...week, [day]: !week[day] } : week,
+        i === weekIdx
+          ? { ...week, [day]: { ...week[day], checked: !week[day].checked } }
+          : week,
       ),
     );
   };
 
-  // 30 min/day estimate for a met-goal week; exact minutes aren't tracked
-  // per day (the physical form is just a checkmark calendar) — this is a
-  // rough indicator, not a precise total.
+  const updateActivity = (weekIdx: number, day: Day, activity: string) => {
+    setWeeks((w) =>
+      w.map((week, i) =>
+        i === weekIdx ? { ...week, [day]: { ...week[day], activity } } : week,
+      ),
+    );
+  };
+
+  // 30 min/day estimate for a checked day. The activity text is stored
+  // separately in submitted_data.weeks.
   const weekMinutes = (week: WeekData) =>
-    Object.values(week).filter(Boolean).length * 30;
+    Object.values(week).filter((day) => day.checked).length * 30;
 
   const handleSave = async () => {
     if (!selectedStudent) return;
@@ -152,7 +198,7 @@ export default function PortalPeLog() {
         (week, i) => `
         <tr>
           <td class="week">Week ${i + 1}</td>
-          ${DAYS.map((d) => `<td>${week[d] ? "✓" : ""}</td>`).join("")}
+          ${DAYS.map((d) => `<td><div>${week[d].checked ? "✓" : ""}</div><div class="activity">${escapeHtml(week[d].activity)}</div></td>`).join("")}
         </tr>`,
       )
       .join("");
@@ -170,6 +216,7 @@ export default function PortalPeLog() {
             th, td { border: 1px solid #999; padding: 10px; text-align: center; }
             th { background: #f2f2f2; }
             td.week { text-align: left; font-weight: bold; }
+            .activity { font-size: 11px; color: #333; margin-top: 4px; }
           </style>
         </head>
         <body>
@@ -251,17 +298,27 @@ export default function PortalPeLog() {
                     <td className="p-3 font-medium">Week {i + 1}</td>
                     {DAYS.map((d) => (
                       <td key={d} className="p-2 text-center">
-                        <button
-                          type="button"
-                          onClick={() => toggleDay(i, d)}
-                          className={`h-8 w-8 rounded border ${
-                            week[d]
-                              ? "bg-primary text-primary-foreground border-primary"
-                              : "border-border/50 hover:bg-secondary"
-                          }`}
-                        >
-                          {week[d] ? "✓" : ""}
-                        </button>
+                        <div className="flex flex-col items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => toggleDay(i, d)}
+                            className={`h-8 w-8 rounded border ${
+                              week[d].checked
+                                ? "bg-primary text-primary-foreground border-primary"
+                                : "border-border/50 hover:bg-secondary"
+                            }`}
+                            aria-label={`Week ${i + 1} ${d} ${week[d].checked ? "done" : "not done"}`}
+                          >
+                            {week[d].checked ? "✓" : ""}
+                          </button>
+                          <Input
+                            className="bg-background h-8 w-24 text-xs"
+                            value={week[d].activity}
+                            onChange={(event) => updateActivity(i, d, event.target.value)}
+                            placeholder="Activity"
+                            aria-label={`Week ${i + 1} ${d} activity`}
+                          />
+                        </div>
                       </td>
                     ))}
                     <td
@@ -275,8 +332,10 @@ export default function PortalPeLog() {
             </table>
           </div>
           <p className="text-xs text-foreground/50">
-            Estimated at 30 min per checked day — the target is roughly 4 active
-            days a week to reach 2 hours.
+            Estimated at 30 min per checked day. The target is roughly 4 active
+            days a week to reach 2 hours. Type the activity for each day
+            (walking, running, and so on). It is saved with the checkmarks and
+            shows on the printed log.
           </p>
 
           <div className="space-y-1.5 max-w-sm">

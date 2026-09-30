@@ -81,6 +81,14 @@ export function reportLetter(
   return "";
 }
 
+/** A prescribed slot is completed when it has a score or is passed/failed. */
+export function isSlotCompleted(
+  status: string | null | undefined,
+  score: number | null | undefined,
+): boolean {
+  return (score != null && !Number.isNaN(score)) || status === "passed" || status === "failed";
+}
+
 export function average(values: Array<number | null | undefined>): number | null {
   const nums = values.filter((n): n is number => n != null && !Number.isNaN(n));
   if (nums.length === 0) return null;

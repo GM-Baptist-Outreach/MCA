@@ -209,7 +209,7 @@ export default function PortalProgress() {
   if (!selectedStudent) {
     return (
       <p className="text-foreground/60">
-        Select a student above to see their progress.
+        Select a student above to upload tests.
       </p>
     );
   }
@@ -223,7 +223,7 @@ export default function PortalProgress() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h2 className="text-2xl font-bold font-serif text-primary">
-            {selectedStudent.student_name}'s Progress
+            {selectedStudent.student_name}'s Upload Tests
           </h2>
           <p className="text-sm text-foreground/60">
             Gold stars are verified by MCA staff. Gray stars are self-reported
@@ -359,7 +359,7 @@ export default function PortalProgress() {
 
       {scoresBySubject.size === 0 ? (
         <p className="text-foreground/60">
-          No scores recorded yet for {selectedStudent.student_name}.
+          No tests uploaded yet for {selectedStudent.student_name}.
         </p>
       ) : (
         <div className="space-y-6">

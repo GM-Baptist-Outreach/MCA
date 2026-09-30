@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { supabase } from "@/lib/supabaseClient";
 import { useToast } from "@/hooks/use-toast";
@@ -6,7 +6,37 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Printer } from "lucide-react";
 import type { PortalContext } from "../PortalLayout";
+
+const SIGNATURE_SRC = "/david-signature.png";
+
+function PrincipalSignature() {
+  const [useImage, setUseImage] = useState(false);
+
+  useEffect(() => {
+    const image = new Image();
+    image.onload = () => setUseImage(true);
+    image.onerror = () => setUseImage(false);
+    image.src = SIGNATURE_SRC;
+  }, []);
+
+  if (useImage) {
+    return (
+      <img
+        src={SIGNATURE_SRC}
+        alt="David Moore"
+        className="h-16 w-auto"
+      />
+    );
+  }
+
+  return (
+    <p className="font-signature text-4xl leading-none text-foreground">
+      David Moore
+    </p>
+  );
+}
 
 interface StudentRow {
   studentId: string;
@@ -100,12 +130,23 @@ export default function PortalRecordsRelease() {
   };
 
   return (
-    <div className="space-y-6 max-w-2xl">
-      <div>
-        <h2 className="text-2xl font-bold font-serif text-primary">
-          Student Records Release
-        </h2>
-        <p className="text-sm text-foreground/60">Midwest Christian Academy</p>
+    <div className="space-y-6 max-w-2xl print:max-w-none">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h2 className="text-2xl font-bold font-serif text-primary">
+            Student Records Release
+          </h2>
+          <p className="text-sm text-foreground/60">Midwest Christian Academy</p>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          className="print:hidden"
+          onClick={() => window.print()}
+        >
+          <Printer className="h-4 w-4 mr-1.5" />
+          Print
+        </Button>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
@@ -232,7 +273,27 @@ export default function PortalRecordsRelease() {
           </div>
         </div>
 
-        <Button type="submit" disabled={submitting}>
+        <div className="rounded-xl border border-border/50 bg-secondary/30 p-5 break-inside-avoid print:bg-transparent">
+          <p className="text-sm text-foreground/80 mb-6">
+            Receiving principal
+          </p>
+          <div className="grid sm:grid-cols-2 gap-8">
+            <div>
+              <div className="min-h-16 flex items-end">
+                <PrincipalSignature />
+              </div>
+              <div className="border-t border-foreground/40 mt-2 pt-1 text-xs text-foreground/70">
+                Receiving Principal
+              </div>
+            </div>
+            <div>
+              <div className="min-h-16 border-b border-foreground/40" />
+              <div className="mt-2 text-xs text-foreground/70">Date</div>
+            </div>
+          </div>
+        </div>
+
+        <Button type="submit" disabled={submitting} className="print:hidden">
           {submitting ? "Submitting..." : "Sign & Submit"}
         </Button>
       </form>

@@ -201,9 +201,6 @@ function CourseCompletionForm({
   const [schoolYear, setSchoolYear] = useState("");
   const [finalAverage, setFinalAverage] = useState("");
   const [creditEarned, setCreditEarned] = useState("1.00");
-  const [daysPresent, setDaysPresent] = useState("");
-  const [absences, setAbsences] = useState("");
-  const [classRank, setClassRank] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -236,9 +233,6 @@ function CourseCompletionForm({
         final_average: avgNum,
         letter_grade: gradePreview?.letter ?? null,
         credit_earned: creditNum,
-        days_present: daysPresent ? parseInt(daysPresent, 10) : null,
-        absences: absences ? parseInt(absences, 10) : null,
-        class_rank: classRank || null,
       });
 
     if (insertError) {
@@ -252,9 +246,6 @@ function CourseCompletionForm({
     setSchoolYear("");
     setFinalAverage("");
     setCreditEarned("1.00");
-    setDaysPresent("");
-    setAbsences("");
-    setClassRank("");
     setSaving(false);
     onSaved();
   };
@@ -363,33 +354,6 @@ function CourseCompletionForm({
             step="0.25"
             value={creditEarned}
             onChange={(e) => setCreditEarned(e.target.value)}
-          />
-        </div>
-      </div>
-      <div className="grid grid-cols-3 gap-3">
-        <div className="space-y-1">
-          <Label className="text-xs">Days Present</Label>
-          <Input
-            className="bg-secondary h-9"
-            value={daysPresent}
-            onChange={(e) => setDaysPresent(e.target.value)}
-          />
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Absences</Label>
-          <Input
-            className="bg-secondary h-9"
-            value={absences}
-            onChange={(e) => setAbsences(e.target.value)}
-          />
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Class Rank (manual)</Label>
-          <Input
-            className="bg-secondary h-9"
-            placeholder="4 of 14"
-            value={classRank}
-            onChange={(e) => setClassRank(e.target.value)}
           />
         </div>
       </div>

@@ -16,6 +16,7 @@ export default {
       fontFamily: {
         sans: ['"IBM Plex Sans"', 'sans-serif'],
         serif: ['"Libre Baskerville"', 'serif'],
+        signature: ['"Dancing Script"', '"Segoe Script"', '"Apple Chancery"', "cursive"],
       },
       colors: {
         border: "hsl(var(--border))",

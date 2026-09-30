@@ -333,34 +333,35 @@ export default function PortalGoalCard() {
                     <td className="p-3 font-medium">{row.subjectName}</td>
                     {DAYS.map((d) => (
                       <td key={d} className="p-2">
-                        <div className="relative">
+                        <div className="flex items-center justify-center gap-1">
                           <Input
-                            className="bg-background h-9 w-16 text-center mx-auto"
+                            className="bg-background h-9 w-24 text-center"
                             value={row.goals[d].value}
                             onChange={(e) =>
                               updateGoal(row.subjectId, d, e.target.value)
                             }
                             placeholder="pg #"
+                            aria-label={`${row.subjectName} ${d} page`}
                           />
                           <button
                             type="button"
                             onClick={() => toggleDone(row.subjectId, d)}
-                            className={`absolute inset-0 flex items-center justify-center text-2xl font-bold pointer-events-none ${
+                            className={`h-9 w-9 shrink-0 rounded border text-sm font-bold ${
                               row.goals[d].done
-                                ? "text-destructive"
-                                : "text-transparent"
+                                ? "border-destructive text-destructive"
+                                : "border-border text-foreground/30"
                             }`}
-                          >
-                            X
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => toggleDone(row.subjectId, d)}
-                            className="absolute inset-0"
                             title={
                               row.goals[d].done ? "Mark not done" : "Mark done"
                             }
-                          />
+                            aria-label={
+                              row.goals[d].done
+                                ? `${row.subjectName} ${d} mark not done`
+                                : `${row.subjectName} ${d} mark done`
+                            }
+                          >
+                            {row.goals[d].done ? "X" : ""}
+                          </button>
                         </div>
                       </td>
                     ))}
@@ -415,8 +416,8 @@ export default function PortalGoalCard() {
           </div>
 
           <p className="text-xs text-foreground/50">
-            Click a day's cell to mark that goal complete — an X appears over
-            it, but the original page number stays visible underneath.
+            Type a page number in each day. Use the X button to mark that goal
+            done. The page number stays in the box and is saved with the week.
           </p>
 
           <Button onClick={handleSave} disabled={saving || rows.length === 0}>

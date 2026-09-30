@@ -317,7 +317,7 @@ export default function PortalEnrollmentAgreement() {
           </div>
           <p className="text-xs text-foreground/50">
             Questions about your bill or account should be directed to
-            admin@mcahomeschool.com.
+            david@midwestchristianacademy.com.
           </p>
         </div>
 

@@ -7,29 +7,28 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type { PortalContext } from "./PortalLayout";
-import { useLoggedCourseReport, type StarPace } from "@/hooks/useLoggedCourseReport";
+import { useLoggedCourseReport } from "@/hooks/useLoggedCourseReport";
 import { ReportChrome } from "./ReportChrome";
-
-function starClass(score: number): string {
-  if (score >= 98) return "fill-amber-400 text-amber-600";
-  if (score >= 90) return "fill-yellow-300 text-yellow-600";
-  if (score >= 80) return "fill-lime-500 text-lime-700";
-  return "fill-transparent text-foreground/30";
-}
+import {
+  SUBJECT_GROUPS,
+  SUBJECT_GROUP_COLORS,
+  subjectGroup,
+} from "@/lib/subjectGroups";
 
 export default function PortalStarChart() {
   const { selectedStudent } = useOutletContext<PortalContext>();
   const report = useLoggedCourseReport(selectedStudent?.id);
 
+  const stars = report.stars;
   const grouped = useMemo(() => {
-    const map = new Map<string, StarPace[]>();
-    for (const star of report.stars) {
+    const map = new Map<string, typeof stars>();
+    for (const star of stars) {
       const list = map.get(star.subjectName) ?? [];
       list.push(star);
       map.set(star.subjectName, list);
     }
     return [...map.entries()];
-  }, [report.stars]);
+  }, [stars]);
 
   if (!selectedStudent) {
     return <p className="text-foreground/60">Select a student above to view the star chart.</p>;
@@ -43,44 +42,55 @@ export default function PortalStarChart() {
       onSchoolYear={report.setSchoolYear}
     >
       <p className="text-sm text-foreground/60">
-        One star for each completed PACE. Gold is 98+, yellow is 90–97, green
-        is 80–89. Hover a star for the score and date. Stars from logged
-        courses in {report.schoolYear} are included, plus any passing score
-        submitted on the Progress page.
+        One star for each completed PACE, colored by subject. Hover a star for
+        the score and date. Stars from logged courses in {report.schoolYear}{" "}
+        are included, plus any passing score submitted on the Upload Tests page.
       </p>
+      <div className="flex flex-wrap gap-3 text-xs">
+        {SUBJECT_GROUPS.map((group) => (
+          <span key={group} className="inline-flex items-center gap-1.5">
+            <Star className={`h-4 w-4 ${SUBJECT_GROUP_COLORS[group].star}`} />
+            {group}
+          </span>
+        ))}
+      </div>
       {report.loading ? (
         <p className="text-foreground/60">Loading...</p>
       ) : grouped.length === 0 ? (
         <p className="text-foreground/60">No completed PACEs to chart yet.</p>
       ) : (
         <div className="space-y-6">
-          {grouped.map(([subject, stars]) => (
-            <div key={subject}>
-              <h3 className="font-semibold mb-2">{subject}</h3>
-              <div className="flex flex-wrap gap-3">
-                {stars.map((star) => (
-                  <Tooltip key={star.key}>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        className="flex flex-col items-center gap-1"
-                        aria-label={`${subject} PACE ${star.paceNumber}, score ${star.score}`}
-                      >
-                        <Star className={`h-8 w-8 ${starClass(star.score)}`} />
-                        <span className="text-xs text-foreground/60">{star.paceNumber}</span>
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>
-                        PACE {star.paceNumber}: {star.score}%
-                        {star.date ? ` on ${star.date}` : ""}
-                      </p>
-                    </TooltipContent>
-                  </Tooltip>
-                ))}
+          {grouped.map(([subject, stars]) => {
+            const group = subjectGroup(subject) ?? "Electives";
+            const starClass = SUBJECT_GROUP_COLORS[group].star;
+            return (
+              <div key={subject}>
+                <h3 className="font-semibold mb-2">{subject}</h3>
+                <div className="flex flex-wrap gap-3">
+                  {stars.map((star) => (
+                    <Tooltip key={star.key}>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          className="flex flex-col items-center gap-1"
+                          aria-label={`${subject} PACE ${star.paceNumber}, score ${star.score}`}
+                        >
+                          <Star className={`h-8 w-8 ${starClass}`} />
+                          <span className="text-xs text-foreground/60">{star.paceNumber}</span>
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>
+                          PACE {star.paceNumber}: {star.score}%
+                          {star.date ? ` on ${star.date}` : ""}
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  ))}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </ReportChrome>

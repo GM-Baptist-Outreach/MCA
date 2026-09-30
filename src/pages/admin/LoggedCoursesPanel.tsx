@@ -12,7 +12,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  addDays,
+  average,
   currentSchoolYear,
+  isSlotCompleted,
+  isoToday,
   nextSchoolYear,
   paceRangeForLevel,
   reportLetter,
@@ -146,7 +150,10 @@ export default function LoggedCoursesPanel({
         q3_ship_date: row.q3_ship_date ?? "",
         q4_ship_date: row.q4_ship_date ?? "",
         anchor_ship_date: row.anchor_ship_date ?? "",
-        next_ship_date: row.next_ship_date ?? "",
+        next_ship_date:
+          row.mode === "every_8_weeks" && !row.next_ship_date
+            ? addDays(isoToday(), 56)
+            : row.next_ship_date ?? "",
         shipment_paused: row.shipment_paused,
         pause_reason: row.pause_reason,
       });
@@ -174,6 +181,15 @@ export default function LoggedCoursesPanel({
   }, [slots, subjects]);
 
   const selected = slots.find((slot) => slot.id === selectedSlotId) ?? null;
+
+  const totals = useMemo(() => {
+    const completed = slots.filter((slot) => isSlotCompleted(slot.status, slot.score)).length;
+    return {
+      completed,
+      remaining: slots.length - completed,
+      average: average(slots.map((slot) => slot.score)),
+    };
+  }, [slots]);
 
   const prescribe = async () => {
     if (!subjectId) return;
@@ -273,7 +289,10 @@ export default function LoggedCoursesPanel({
       q3_ship_date: schedule.q3_ship_date || null,
       q4_ship_date: schedule.q4_ship_date || null,
       anchor_ship_date: schedule.anchor_ship_date || null,
-      next_ship_date: schedule.next_ship_date || null,
+      next_ship_date:
+        schedule.mode === "every_8_weeks"
+          ? schedule.next_ship_date || addDays(isoToday(), 56)
+          : schedule.next_ship_date || null,
       updated_at: new Date().toISOString(),
     };
     const { error } = await supabase
@@ -328,6 +347,28 @@ export default function LoggedCoursesPanel({
         { onConflict: "student_id,item_id" },
       );
     }
+    setBusy(false);
+    load();
+  };
+
+  const reissueSlot = async () => {
+    if (!selected || selected.status !== "failed") return;
+    setBusy(true);
+    const { error } = await supabase.rpc("mca_reissue_pace", { slot_id: selected.id });
+    if (error) {
+      toast({
+        title: "Couldn't re-issue PACE",
+        description: error.message,
+        variant: "destructive",
+      });
+      setBusy(false);
+      return;
+    }
+    toast({
+      title: "PACE re-issued",
+      description: `PACE ${selected.pace_number} is issued again. The failed score was kept in the notes.`,
+    });
+    setSelectedSlotId(null);
     setBusy(false);
     load();
   };
@@ -431,10 +472,23 @@ export default function LoggedCoursesPanel({
         <p className="text-sm text-foreground/60">No PACEs prescribed for {schoolYear}.</p>
       ) : (
         <div className="space-y-3 overflow-x-auto">
-          {bySubject.map(([id, subjectSlots]) => (
+          <p className="text-sm text-foreground/80">
+            Overall: Avg {totals.average != null ? `${totals.average.toFixed(1)}%` : "n/a"} | Completed{" "}
+            {totals.completed} | Remaining {totals.remaining}
+          </p>
+          {bySubject.map(([id, subjectSlots]) => {
+            const completed = subjectSlots.filter((slot) =>
+              isSlotCompleted(slot.status, slot.score),
+            ).length;
+            const subjectAverage = average(subjectSlots.map((slot) => slot.score));
+            return (
             <div key={id} className="min-w-[760px]">
               <p className="text-sm font-medium mb-1">
                 {subjects.find((subject) => subject.id === id)?.name ?? "Subject"}
+                <span className="ml-2 font-normal text-foreground/70">
+                  Avg {subjectAverage != null ? `${subjectAverage.toFixed(1)}%` : "n/a"} | Completed{" "}
+                  {completed} | Remaining {subjectSlots.length - completed}
+                </span>
               </p>
               <div className="grid grid-cols-12 gap-1">
                 {Array.from({ length: 12 }, (_, index) => {
@@ -475,7 +529,8 @@ export default function LoggedCoursesPanel({
                 })}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -522,6 +577,11 @@ export default function LoggedCoursesPanel({
           >
             Save score
           </Button>
+          {selected.status === "failed" && (
+            <Button size="sm" variant="destructive" disabled={busy} onClick={reissueSlot}>
+              Re-issue
+            </Button>
+          )}
         </div>
       )}
 
@@ -534,6 +594,10 @@ export default function LoggedCoursesPanel({
               setSchedule((current) => ({
                 ...current,
                 mode: mode as Schedule["mode"],
+                next_ship_date:
+                  mode === "every_8_weeks" && !current.next_ship_date
+                    ? addDays(isoToday(), 56)
+                    : current.next_ship_date,
               }))
             }
           >
@@ -555,35 +619,46 @@ export default function LoggedCoursesPanel({
             className="bg-background h-9"
           />
         </div>
-        <div className="grid grid-cols-2 gap-2">
-          {(
-            [
-              ["q1_ship_date", "Q1 at enroll"],
-              ["q2_ship_date", "Q2"],
-              ["q3_ship_date", "Q3"],
-              ["q4_ship_date", "Q4"],
-            ] as const
-          ).map(([key, label]) => (
-            <div key={key} className="space-y-1">
-              <Label className="text-xs">{label}</Label>
-              <Input
-                type="date"
-                value={schedule[key]}
-                onChange={(event) =>
-                  setSchedule((current) => ({ ...current, [key]: event.target.value }))
-                }
-                className="bg-background h-9"
-              />
-            </div>
-          ))}
-        </div>
+        {schedule.mode === "every_8_weeks" ? (
+          <div className="space-y-1 text-sm">
+            <p className="text-xs font-medium text-foreground/70">Upcoming ship dates</p>
+            {[56, 112, 168].map((days) => {
+              const base = schedule.next_ship_date || addDays(isoToday(), 56);
+              return (
+                <p key={days} className="text-foreground/70">
+                  +{days} days: {addDays(base, days)}
+                </p>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-2">
+            {(
+              [
+                ["q1_ship_date", "Q1 at enroll"],
+                ["q2_ship_date", "Q2"],
+                ["q3_ship_date", "Q3"],
+                ["q4_ship_date", "Q4"],
+              ] as const
+            ).map(([key, label]) => (
+              <div key={key} className="space-y-1">
+                <Label className="text-xs">{label}</Label>
+                <Input
+                  type="date"
+                  value={schedule[key]}
+                  onChange={(event) =>
+                    setSchedule((current) => ({ ...current, [key]: event.target.value }))
+                  }
+                  className="bg-background h-9"
+                />
+              </div>
+            ))}
+          </div>
+        )}
         <p className="text-xs text-foreground/50 sm:col-span-2">
-          2025-26: Q1 is the first 3 PACEs at enrollment, so that date stays
-          blank. Q2 is 2025-10-26, Q3 is 2026-01-11, and Q4 is 2026-03-08.
-          One week before the next ship date, pick-list generation takes the
-          next 3 unissued PACEs in each logged subject. If the 6 most recently
-          issued PACEs across subjects lack scores, the shipment pauses and
-          the pick list is marked paused.
+          {schedule.mode === "every_8_weeks"
+            ? "Every 8 weeks hides the quarter dates. The next ship date stays manual. If it is blank, it defaults to 56 days after today. The preview lists the dates 56, 112, and 168 days after that. One week before the next ship date, pick-list generation takes the next 3 unissued PACEs in each logged subject. If the 6 most recently issued PACEs across subjects lack scores, the shipment pauses and the pick list is marked paused."
+            : "2025-26: Q1 is the first 3 PACEs at enrollment, so that date stays blank. Q2 is 2025-10-26, Q3 is 2026-01-11, and Q4 is 2026-03-08. One week before the next ship date, pick-list generation takes the next 3 unissued PACEs in each logged subject. If the 6 most recently issued PACEs across subjects lack scores, the shipment pauses and the pick list is marked paused."}
         </p>
         <div className="flex flex-wrap gap-2 sm:col-span-2">
           <Button size="sm" variant="outline" onClick={saveSchedule} disabled={busy}>
