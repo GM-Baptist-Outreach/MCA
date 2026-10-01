@@ -357,7 +357,10 @@ Deno.serve(async (req: Request) => {
         continue;
       }
       const due = shipDate >= today && shipDate <= addDays(today, 7);
-      if (!due && !force) {
+      // An overdue ship date (e.g. a start date set in the past) is still
+      // picked up, but only while that cycle has no pick list yet.
+      const overdue = shipDate < today;
+      if (!due && !overdue && !force) {
         results.push({ student_id: schedule.student_id, skipped: "outside 7-day window", shipDate });
         continue;
       }
@@ -371,6 +374,15 @@ Deno.serve(async (req: Request) => {
         .maybeSingle();
       // A ready/shipped list is final unless staff forces a rebuild.
       // A paused list is rechecked so the shipment can proceed once scores exist.
+      if (existing && overdue && !due && !force) {
+        results.push({
+          student_id: schedule.student_id,
+          skipped: "overdue cycle already has a pick list",
+          pick_list_id: existing.id,
+          status: existing.status,
+        });
+        continue;
+      }
       if (existing && existing.status !== "paused" && !force) {
         results.push({
           student_id: schedule.student_id,
@@ -428,6 +440,18 @@ async function buildForSchedule(
   if (slotError) throw slotError;
 
   const slots = (slotRows ?? []) as SlotRow[];
+  // PACEs already recorded at home in PACE Status (handed out by hand, or
+  // marked by the parent) are not shipped again, even if the slot still
+  // says prescribed.
+  const { data: atHomeRows, error: atHomeError } = await admin
+    .from("pace_status")
+    .select("item_id")
+    .eq("student_id", schedule.student_id);
+  if (atHomeError) throw atHomeError;
+  const atHome = new Set((atHomeRows ?? []).map((row) => row.item_id as string));
+  const shippable = slots.filter(
+    (slot) => !(slot.status === "prescribed" && slot.item_id && atHome.has(slot.item_id)),
+  );
   const annual = schedule.mode === "annual";
   const onThisList = new Set<string>();
   if (options.existingPickListId) {
@@ -441,7 +465,7 @@ async function buildForSchedule(
   }
   // Annual Ship has no later shipment to hold back, so the score gate is skipped.
   const missing = annual ? [] : missingScores(slots);
-  const quarter = nextQuarter(slots, onThisList, annual);
+  const quarter = nextQuarter(shippable, onThisList, annual);
 
   const familyRel = student?.families as
     | { email: string; parent_name: string }

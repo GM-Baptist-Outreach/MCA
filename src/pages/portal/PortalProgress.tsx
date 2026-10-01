@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/popover";
 import { Star, Camera, Upload, Check, ChevronsUpDown } from "lucide-react";
 import type { PortalContext } from "./PortalLayout";
+import { TEST_PHOTO_ACCEPT, testPhotoContentType } from "@/lib/testPhotoType";
 import { usePrescribedSubjects } from "@/hooks/useLoggedCourseReport";
 import {
   compareSubjectNames,
@@ -183,10 +184,10 @@ export default function PortalProgress() {
     if (files && files.length > 0) {
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        const isImage =
-          file.type.startsWith("image/") || /\.(heic|heif|jpe?g|png|webp)$/i.test(file.name);
-        if (!isImage) {
-          setFormError(`${file.name} is not a photo. Upload pictures of the test pages.`);
+        if (!testPhotoContentType(file)) {
+          setFormError(
+            `${file.name} is not a supported photo. Upload JPEG, PNG, HEIC, WebP, or GIF pictures of the test pages.`,
+          );
           return;
         }
         if (file.size > MAX_TEST_PHOTO_BYTES) {
@@ -205,7 +206,11 @@ export default function PortalProgress() {
         const path = `${family.id}/${selectedStudent.id}/${Date.now()}-${i}-${safeStorageName(file.name)}`;
         const { error: uploadError } = await supabase.storage
           .from("test-score-photos")
-          .upload(path, file);
+          .upload(path, file, {
+            // An empty browser type (common for iPhone HEIC) would be stored as
+            // octet-stream and refused by the bucket's image-only rule.
+            contentType: testPhotoContentType(file) ?? undefined,
+          });
         if (uploadError) {
           setFormError(`Couldn't upload ${file.name}: ${uploadError.message}`);
           setSubmitting(false);
@@ -431,7 +436,7 @@ export default function PortalProgress() {
             <Label>Photos of All Test Pages</Label>
             <Input
               type="file"
-              accept="image/*"
+              accept={TEST_PHOTO_ACCEPT}
               multiple
               required
               onChange={(e) => setFiles(e.target.files)}

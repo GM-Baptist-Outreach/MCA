@@ -95,6 +95,19 @@ Deno.serve(async (req: Request) => {
       });
     }
 
+    // Every cart line needs a whole-number quantity from 1 to 999. Checked
+    // before the item lookup so a bad line is never silently dropped.
+    const badQuantity = items.some((i: any) => {
+      const quantity = Number(i?.quantity);
+      return !Number.isInteger(quantity) || quantity < 1 || quantity > 999;
+    });
+    if (badQuantity) {
+      return new Response(
+        JSON.stringify({ error: "Please enter a whole-number quantity from 1 to 999." }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
     const { data: dbItems, error: itemsError } = await admin
       .from("items")
       .select("id, original_name, sales_price, active")
@@ -110,13 +123,7 @@ Deno.serve(async (req: Request) => {
     for (const cartLine of items) {
       const dbItem = dbItemsById.get(cartLine.itemId);
       const quantity = Number(cartLine.quantity);
-      if (!dbItem || !dbItem.active || !Number.isInteger(quantity) || quantity <= 0) continue;
-      if (quantity > 999) {
-        return new Response(
-          JSON.stringify({ error: `Please contact us for orders over 999 of one item (${dbItem.original_name}).` }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-        );
-      }
+      if (!dbItem || !dbItem.active) continue;
 
       const unitCents = Math.round(Number(dbItem.sales_price) * 100);
       totalQuantity += quantity;

@@ -68,7 +68,8 @@ interface StoreItem {
   short_description?: string | null;
   image_path?: string | null;
   subjects: { name: string; image_path?: string | null } | null;
-  quantity_on_hand: number | null;
+  // Shoppers only ever learn in/out of stock, never a count.
+  out_of_stock: boolean;
 }
 
 // Round 3 A3 (marker MCA_R3_A3_ITEM_EDIT): store card photo + short description.
@@ -178,12 +179,21 @@ export default function Store() {
       // truncates — fetch in pages until a page comes back short.
       const PAGE_SIZE = 1000;
       const allItems: StoreItem[] = [];
+      // Stock comes from a safe RPC that returns only the ids of tracked
+      // items with nothing on hand. A failure just hides the note.
+      const { data: outOfStockIds, error: stockError } = await supabase.rpc(
+        "store_out_of_stock_item_ids",
+      );
+      if (stockError) console.error("[store] stock lookup failed", stockError);
+      const outOfStock = new Set(
+        ((outOfStockIds as string[] | null) ?? []).map((id) => String(id)),
+      );
       let from = 0;
       while (true) {
         const { data, error: pageError } = await supabase
           .from("items")
           .select(
-            "id, subject_id, sku, item_type, pace_number, range_start, range_end, grade_level, original_name, sales_price, active, short_description, image_path, subjects(name, image_path), inventory_levels(quantity_on_hand)",
+            "id, subject_id, sku, item_type, pace_number, range_start, range_end, grade_level, original_name, sales_price, active, short_description, image_path, subjects(name, image_path)",
           )
           .eq("active", true)
           .order("name", { foreignTable: "subjects", ascending: true })
@@ -199,14 +209,12 @@ export default function Store() {
           return;
         }
 
-        const page = (
-          (data as unknown as (StoreItem & {
-            inventory_levels: { quantity_on_hand: number }[];
-          })[]) || []
-        ).map((row) => ({
-          ...row,
-          quantity_on_hand: row.inventory_levels?.[0]?.quantity_on_hand ?? null,
-        }));
+        const page = ((data as unknown as Omit<StoreItem, "out_of_stock">[]) || []).map(
+          (row) => ({
+            ...row,
+            out_of_stock: outOfStock.has(row.id),
+          }),
+        );
         allItems.push(...page);
         if (page.length < PAGE_SIZE) break;
         from += PAGE_SIZE;
@@ -804,13 +812,12 @@ export default function Store() {
                         <p className="text-primary font-bold">
                           ${item.sales_price.toFixed(2)}
                         </p>
-                        {item.quantity_on_hand != null &&
-                          item.quantity_on_hand <= 0 && (
-                            <p className="text-xs text-destructive font-medium mt-1">
-                              Currently out of stock — order anyway and we'll
-                              follow up on timing
-                            </p>
-                          )}
+                        {item.out_of_stock && (
+                          <p className="text-xs text-destructive font-medium mt-1">
+                            Currently out of stock — order anyway and we'll
+                            follow up on timing
+                          </p>
+                        )}
                       </div>
                       <div className="mt-4">
                         {inCart ? (
