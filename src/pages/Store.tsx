@@ -172,6 +172,7 @@ export default function Store() {
           .order("pace_number", { ascending: true, nullsFirst: false })
           .order("range_start", { ascending: true, nullsFirst: false })
           .order("original_name", { ascending: true })
+          .order("id", { ascending: true })
           .range(from, from + PAGE_SIZE - 1);
 
         if (pageError) {
@@ -208,10 +209,20 @@ export default function Store() {
         (subject) => subject.store_visible !== false,
       );
       const visibleIds = new Set(visibleSubjects.map((subject) => subject.id));
+      // PostgREST's foreign-table order doesn't sort the parent rows, so sort
+      // here: subject order (Math, English, Word Building, Science, Social
+      // Studies, then electives A-Z), then PACE number / range, then name.
+      const num = (n: number | null) => (n == null ? Number.MAX_SAFE_INTEGER : n);
       setItems(
-        allItems.filter(
-          (item) => item.subject_id == null || visibleIds.has(item.subject_id),
-        ),
+        allItems
+          .filter((item) => item.subject_id == null || visibleIds.has(item.subject_id))
+          .sort(
+            (a, b) =>
+              compareSubjectNames(a.subjects?.name ?? "", b.subjects?.name ?? "") ||
+              num(a.pace_number) - num(b.pace_number) ||
+              num(a.range_start) - num(b.range_start) ||
+              a.original_name.localeCompare(b.original_name, undefined, { numeric: true }),
+          ),
       );
       setSubjects(
         visibleSubjects.slice().sort((a, b) => compareSubjectNames(a.name, b.name)),

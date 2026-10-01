@@ -1580,11 +1580,24 @@ export function AdminTestReviews({
                         Photos
                       </Button>
                       <div className="flex gap-1 mt-1">
-                        {(photos[row.id] ?? []).map((url) => (
-                          <button key={url} type="button" onClick={() => setLightbox(url)}>
-                            <img src={url} alt="" className="h-12 w-12 object-cover rounded border" />
-                          </button>
-                        ))}
+                        {(photos[row.id] ?? []).map((url) =>
+                          /\.(heic|heif)(\?|$)/i.test(url) ? (
+                            // Chrome can't show iPhone HEIC photos inline; open or download instead.
+                            <a
+                              key={url}
+                              href={url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="h-12 w-12 flex items-center justify-center text-[10px] text-center leading-tight rounded border underline"
+                            >
+                              HEIC photo (open)
+                            </a>
+                          ) : (
+                            <button key={url} type="button" onClick={() => setLightbox(url)}>
+                              <img src={url} alt="" className="h-12 w-12 object-cover rounded border" />
+                            </button>
+                          ),
+                        )}
                       </div>
                     </td>
                     <td className="p-3 capitalize">{row.review_status}</td>

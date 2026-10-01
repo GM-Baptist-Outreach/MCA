@@ -342,7 +342,7 @@ export function AdminBackorders() {
                         type="button"
                         size="sm"
                         onClick={() =>
-                          saveFulfilled(row, (draftDate[key] || new Date().toISOString().slice(0, 10)) + "T00:00:00Z")
+                          saveFulfilled(row, (draftDate[key] || new Date().toLocaleDateString("en-CA")) + "T00:00:00Z")
                         }
                       >
                         Mark fulfilled

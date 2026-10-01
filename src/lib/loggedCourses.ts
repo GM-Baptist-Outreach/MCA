@@ -523,10 +523,29 @@ export function isExcludedStoreCategory(name: string): boolean {
   });
 }
 
+/** Courses whose heading on David's course list doesn't follow from the name
+ * patterns below (e.g. "NT Church History" is a Bible course, not Social
+ * Studies). Checked before the patterns.
+ */
+const SUBJECT_GROUP_OVERRIDES: Record<string, SubjectGroup> = {
+  accounting: "Math",
+  "general business": "Math",
+  health: "Science",
+  collectivism: "Social Studies",
+  "nt survey": "Electives",
+  "ot survey": "Electives",
+  "nt church history": "Electives",
+  "life of christ": "Electives",
+  "intro to missions": "Electives",
+  "successful living": "Electives",
+};
+
 /** Null for excluded store categories. Everything else maps to one group. */
 export function subjectGroup(name: string): SubjectGroup | null {
   const trimmed = name.trim();
   if (!trimmed || isExcludedStoreCategory(trimmed)) return null;
+  const override = SUBJECT_GROUP_OVERRIDES[trimmed.toLowerCase().replace(/\s+/g, " ")];
+  if (override) return override;
   if (WORD_BUILDING_PATTERN.test(trimmed)) return "Word Building";
   if (ENGLISH_SUBJECT_PATTERN.test(trimmed)) return "English";
   if (SOCIAL_STUDIES_PATTERN.test(trimmed)) return "Social Studies";
