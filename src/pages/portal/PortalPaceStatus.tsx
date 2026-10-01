@@ -17,7 +17,7 @@ import {
   SUBJECT_GROUPS,
   subjectDisplayName,
   subjectGroup,
-  toAcePaceNumber,
+  paceLabel,
   type SubjectGroup,
 } from "@/lib/loggedCourses";
 import type { PortalContext } from "./PortalLayout";
@@ -32,6 +32,7 @@ interface PaceSlotRow {
   subject_id: string;
   subjectName: string;
   itemName: string;
+  itemDescription: string;
 }
 
 type StoredStatus = "ordered" | "in_stock" | "issued";
@@ -64,9 +65,10 @@ const DISPLAY_COLORS: Record<DisplayStatus, string> = {
   paused: "bg-amber-500/10 text-amber-800",
 };
 
+type RelRow = { name?: string; original_name?: string; short_description?: string | null };
 function relName(
-  rel: { name?: string; original_name?: string } | { name?: string; original_name?: string }[] | null,
-  key: "name" | "original_name",
+  rel: RelRow | RelRow[] | null,
+  key: "name" | "original_name" | "short_description",
 ): string {
   if (!rel) return "";
   const row = Array.isArray(rel) ? rel[0] : rel;
@@ -118,7 +120,7 @@ export default function PortalPaceStatus() {
       const { data, error } = await supabase
         .from("student_pace_slots")
         .select(
-          "id, slot_index, pace_number, item_id, status, score, subject_id, subjects(name), items(original_name)",
+          "id, slot_index, pace_number, item_id, status, score, subject_id, subjects(name), items(original_name, short_description)",
         )
         .eq("student_id", selectedStudent.id)
         .eq("school_year", schoolYear)
@@ -148,6 +150,13 @@ export default function PortalPaceStatus() {
             itemName: relName(
               row.items as { original_name: string } | { original_name: string }[] | null,
               "original_name",
+            ),
+            itemDescription: relName(
+              row.items as
+                | { short_description: string | null }
+                | { short_description: string | null }[]
+                | null,
+              "short_description",
             ),
           })),
         );
@@ -413,8 +422,15 @@ export default function PortalPaceStatus() {
                   <tr key={slot.id} className="border-t border-border/50">
                     <td className="p-3">{subjectDisplayName(slot.subjectName)}</td>
                     <td className="p-3">{slot.slot_index}</td>
-                    <td className="p-3">{toAcePaceNumber(slot.pace_number)}</td>
-                    <td className="p-3">{slot.itemName}</td>
+                    <td className="p-3">{paceLabel(slot.subjectName, slot.pace_number)}</td>
+                    <td className="p-3">
+                      {slot.itemName}
+                      {slot.itemDescription && (
+                        <p className="text-xs text-foreground/60 mt-0.5 max-w-sm" data-marker="MCA_LATE_CATALOG">
+                          {slot.itemDescription}
+                        </p>
+                      )}
+                    </td>
                     <td className="p-3">
                       <span
                         className={`text-xs font-medium px-2 py-1 rounded-full ${DISPLAY_COLORS[label]}`}
