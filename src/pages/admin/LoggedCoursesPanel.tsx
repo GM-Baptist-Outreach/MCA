@@ -29,7 +29,7 @@ import {
   subjectDisplayName,
   subjectGroup,
   suggestedFixedShipDates,
-  toAcePaceNumber,
+  paceLabel,
   type CourseCatalogItem,
   type CourseOption,
   type CoursePaceItem,
@@ -160,7 +160,7 @@ export default function LoggedCoursesPanel({
     while (from < 5000) {
       const { data, error } = await supabase
         .from("items")
-        .select("id, subject_id, item_type, pace_number, sales_price, subjects(name)")
+        .select("id, subject_id, item_type, pace_number, sales_price, short_description, subjects(name)")
         .eq("active", true)
         .in("item_type", ["pace", "other"])
         .not("pace_number", "is", null)
@@ -177,6 +177,7 @@ export default function LoggedCoursesPanel({
           item_type: row.item_type,
           pace_number: row.pace_number,
           sales_price: Number(row.sales_price ?? 0),
+          short_description: row.short_description ?? null,
         });
       }
       if (data.length < 1000) break;
@@ -277,6 +278,12 @@ export default function LoggedCoursesPanel({
   }, [slots, subjects]);
 
   const selected = slots.find((slot) => slot.id === selectedSlotId) ?? null;
+  const subjectNameFor = (subjectId: string) =>
+    subjects.find((subject) => subject.id === subjectId)?.name ?? "";
+  const descriptionById = useMemo(
+    () => new Map(courseItems.map((item) => [item.id, item.short_description ?? null])),
+    [courseItems],
+  );
 
   const totals = useMemo(() => {
     const completed = slots.filter((slot) => isSlotCompleted(slot.status, slot.score)).length;
@@ -718,6 +725,16 @@ export default function LoggedCoursesPanel({
                 ))}
               </SelectContent>
             </Select>
+            {(() => {
+              const row = selectedCourse.levels.find((l) => String(l.level) === level);
+              const note =
+                row && row.items.length === 1 ? descriptionById.get(row.items[0].id) : null;
+              return note ? (
+                <p className="text-xs text-foreground/70 max-w-md" data-marker="MCA_LATE_CATALOG">
+                  {note}
+                </p>
+              ) : null;
+            })()}
           </div>
         )}
         <Button
@@ -853,7 +870,7 @@ export default function LoggedCoursesPanel({
                       }`}
                     >
                       <div className={highlighted ? "bg-amber-200 font-semibold" : "bg-secondary/50"}>
-                        {slot ? toAcePaceNumber(slot.pace_number) : "·"}
+                        {slot ? paceLabel(subjectNameFor(slot.subject_id), slot.pace_number) : "·"}
                       </div>
                       <div
                         className={
@@ -879,8 +896,13 @@ export default function LoggedCoursesPanel({
       {selected && (
         <div className="flex flex-wrap gap-2 items-end rounded-lg border border-border/60 p-3">
           <p className="text-sm w-full">
-            PACE {toAcePaceNumber(selected.pace_number)} · {selected.status}
+            PACE {paceLabel(subjectNameFor(selected.subject_id), selected.pace_number)} · {selected.status}
           </p>
+          {selected.item_id && descriptionById.get(selected.item_id) && (
+            <p className="text-xs text-foreground/70 w-full" data-marker="MCA_LATE_CATALOG">
+              {descriptionById.get(selected.item_id)}
+            </p>
+          )}
           <Select
             value={selected.status}
             onValueChange={(status) => saveSlot({ status })}
@@ -931,7 +953,7 @@ export default function LoggedCoursesPanel({
                 variant="outline"
                 disabled={busy}
                 onClick={() =>
-                  removeSlots([selected.id], `PACE ${toAcePaceNumber(selected.pace_number)}`)
+                  removeSlots([selected.id], `PACE ${paceLabel(subjectNameFor(selected.subject_id), selected.pace_number)}`)
                 }
               >
                 Remove PACE

@@ -660,6 +660,7 @@ const CORE_COURSE_RANK: Record<string, number> = {
   Accounting: 220,
   English: 0,
   "Lit & Creative Writing": 10,
+  "Basic Literature": 11,
   "English I": 90,
   "English II": 100,
   "English III": 110,
@@ -725,7 +726,33 @@ export const ELEMENTARY_LEVEL_COURSES = [
   "Animal Science",
   "Bible Reading",
   "Lit & Creative Writing",
+  "Basic Literature",
 ] as const;
+
+/** Late catalog corrections (marker MCA_LATE_CATALOG): Social Studies level 7
+ * is SS 1073-1078 plus Illinois History 1-6, stored as Social Studies PACEs
+ * 79-84 so every level-based path includes them. Basic Lit 7 / 8 are single
+ * PACEs (73 / 85) under "Basic Literature".
+ */
+export const MCA_LATE_CATALOG_MARKER = "MCA_LATE_CATALOG";
+export const ILLINOIS_HISTORY_PACES = { start: 79, end: 84 } as const;
+
+export function isIllinoisHistoryPace(subjectName: string, paceNumber: number): boolean {
+  const pace = toInternalPaceNumber(paceNumber);
+  return (
+    subjectName === "Social Studies" &&
+    pace >= ILLINOIS_HISTORY_PACES.start &&
+    pace <= ILLINOIS_HISTORY_PACES.end
+  );
+}
+
+/** PACE label for grids and pick lists: "1073", or "IL 1" for Illinois History. */
+export function paceLabel(subjectName: string, paceNumber: number): string {
+  if (isIllinoisHistoryPace(subjectName, paceNumber)) {
+    return `IL ${toInternalPaceNumber(paceNumber) - ILLINOIS_HISTORY_PACES.start + 1}`;
+  }
+  return String(toAcePaceNumber(paceNumber));
+}
 
 export interface CourseCatalogItem {
   id: string;
@@ -734,6 +761,7 @@ export interface CourseCatalogItem {
   item_type: string;
   pace_number: number | null;
   sales_price: number;
+  short_description?: string | null;
 }
 
 export interface CoursePaceItem {
@@ -853,7 +881,14 @@ export function isElementaryLevelCourse(
 
 export function courseOptionLabel(option: CourseOption, level?: CourseLevelOption): string {
   if (option.kind === "level" && level) {
-    return `Level ${level.level} · PACEs ${level.aceStart}-${level.aceEnd} · $${level.total.toFixed(2)}`;
+    const subjectName = option.subjectNames[0] ?? "";
+    const regular = level.items.filter((item) => !isIllinoisHistoryPace(subjectName, item.paceNumber));
+    const illinois = level.items.length - regular.length;
+    const first = regular.length ? toAcePaceNumber(regular[0].paceNumber) : level.aceStart;
+    const last = regular.length ? toAcePaceNumber(regular[regular.length - 1].paceNumber) : level.aceEnd;
+    const range = first === last ? `PACE ${first}` : `PACEs ${first}-${last}`;
+    const extra = illinois > 0 ? ` + Illinois History 1-${illinois}` : "";
+    return `Level ${level.level} · ${range}${extra} · $${level.total.toFixed(2)}`;
   }
   if (option.paceStart == null || option.paceEnd == null) {
     return `${option.displayName} · $${option.total.toFixed(2)}`;

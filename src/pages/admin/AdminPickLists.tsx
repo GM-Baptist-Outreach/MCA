@@ -4,7 +4,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Printer } from "lucide-react";
-import { compareSubjectNames, toAcePaceNumber } from "@/lib/loggedCourses";
+import { compareSubjectNames, isIllinoisHistoryPace, paceLabel } from "@/lib/loggedCourses";
 
 const SUPABASE_URL = "https://proiyioqfbjcmprsnqhf.supabase.co";
 
@@ -288,7 +288,9 @@ export default function AdminPickLists() {
         return {
           name,
           quantity: 1,
-          note: [`ACE #${toAcePaceNumber(item.pace_number)}`, item.backordered ? "Backordered - ships later" : ""]
+          note: [
+            isIllinoisHistoryPace(subject, item.pace_number) ? "" : `ACE #${paceLabel(subject, item.pace_number)}`,
+            item.backordered ? "Backordered - ships later" : ""]
             .filter(Boolean)
             .join(" | "),
         };
@@ -444,7 +446,7 @@ export default function AdminPickLists() {
                     const itemName = relText(item.items, "original_name");
                     return (
                       <li key={item.id} className="break-inside-avoid">
-                        {relText(item.subjects, "name") || "Subject"} {toAcePaceNumber(item.pace_number)}
+                        {relText(item.subjects, "name") || "Subject"} {paceLabel(relText(item.subjects, "name"), item.pace_number)}
                         {itemName ? ` · ${itemName}` : ""}
                         {item.quantity_on_hand != null ? ` · on hand ${item.quantity_on_hand}` : ""}
                         {item.backordered ? (
