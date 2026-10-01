@@ -29,3 +29,6 @@ verify_jwt = true
 
 [functions.cancel-store-order]
 verify_jwt = true
+
+[functions.submit-website-form]
+verify_jwt = false
