@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import { supabase } from "@/lib/supabaseClient";
 import { cn } from "@/lib/utils";
@@ -96,12 +96,6 @@ const FORM_TYPE_LABELS: Record<string, string> = {
   music_practice_verification: "Music Practice Verification",
 };
 
-const SUMMARY_ONLY_TYPES = new Set([
-  "goal_card",
-  "pe_activity_log",
-  "music_practice_verification",
-]);
-
 function formatKey(key: string): string {
   return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
@@ -123,9 +117,587 @@ function gradeFromAverage(avg: number): { letter: string; points: number } {
   return { letter: "F", points: 0.0 };
 }
 
+// ---------------------------------------------------------------------------
+// Form submission rendering
+//
+// Every known form_type gets an explicit, human-readable renderer based on
+// the exact `submitted_data` shape written by its portal form
+// (src/pages/portal/forms/*.tsx). Anything unexpected falls through to a
+// generic recursive renderer, so nothing is ever hidden and raw JSON is only
+// shown behind the collapsed "View raw submitted data" toggle.
+// ---------------------------------------------------------------------------
+
+const WEEKDAYS_MON_SUN = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
+const WEEKDAYS_MON_FRI = ["Mon", "Tue", "Wed", "Thu", "Fri"] as const;
+
+type Json = unknown;
+
+function isPlainObject(value: Json): value is Record<string, Json> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isBlank(value: Json): boolean {
+  if (value === null || value === undefined) return true;
+  if (typeof value === "string") return value.trim() === "";
+  if (Array.isArray(value)) return value.length === 0 || value.every(isBlank);
+  if (isPlainObject(value)) return Object.values(value).every(isBlank);
+  return false;
+}
+
+function isScalar(value: Json): value is string | number | boolean {
+  return (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  );
+}
+
+function formatScalar(value: string | number | boolean): string {
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  return String(value);
+}
+
+function asString(value: Json): string {
+  return typeof value === "string" ? value : value == null ? "" : String(value);
+}
+
+function FieldRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex justify-between gap-4">
+      <span className="text-foreground/50">{label}</span>
+      <span className="text-foreground text-right break-words">{value}</span>
+    </div>
+  );
+}
+
+function SectionHeading({ children }: { children: ReactNode }) {
+  return (
+    <p className="pt-2 text-xs font-semibold uppercase tracking-wide text-foreground/60">
+      {children}
+    </p>
+  );
+}
+
+/** Label/value rows for the top-level scalar fields (skipping `exclude`). */
+function ScalarFields({
+  data,
+  exclude = [],
+}: {
+  data: Record<string, Json>;
+  exclude?: string[];
+}) {
+  const rows = Object.entries(data).filter(
+    ([key, value]) => !exclude.includes(key) && isScalar(value) && !isBlank(value),
+  );
+  if (rows.length === 0) return null;
+  return (
+    <div className="space-y-1">
+      {rows.map(([key, value]) => (
+        <FieldRow
+          key={key}
+          label={formatKey(key)}
+          value={formatScalar(value as string | number | boolean)}
+        />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Generic recursive renderer for any nested value: objects become indented
+ * label/value lists, arrays of objects become numbered sub-lists, arrays of
+ * scalars become comma-separated values. Never raw JSON.
+ */
+function NestedValue({ value }: { value: Json }) {
+  if (isScalar(value)) {
+    return <span className="text-foreground">{formatScalar(value)}</span>;
+  }
+  if (Array.isArray(value)) {
+    const items = value.filter((v) => !isBlank(v));
+    if (items.length === 0) return null;
+    if (items.every(isScalar)) {
+      return (
+        <span className="text-foreground">
+          {items.map((v) => formatScalar(v as string | number | boolean)).join(", ")}
+        </span>
+      );
+    }
+    return (
+      <div className="space-y-2">
+        {items.map((item, i) => (
+          <div
+            key={i}
+            className="rounded-md border border-border/50 bg-secondary/30 p-2 space-y-1"
+          >
+            <p className="text-xs font-medium text-foreground/60">#{i + 1}</p>
+            <NestedValue value={item} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (isPlainObject(value)) {
+    const entries = Object.entries(value).filter(([, v]) => !isBlank(v));
+    if (entries.length === 0) return null;
+    return (
+      <div className="space-y-1">
+        {entries.map(([k, v]) =>
+          isScalar(v) ? (
+            <FieldRow key={k} label={formatKey(k)} value={formatScalar(v)} />
+          ) : (
+            <div key={k} className="space-y-1">
+              <p className="text-foreground/50">{formatKey(k)}</p>
+              <div className="pl-3 border-l border-border/50">
+                <NestedValue value={v} />
+              </div>
+            </div>
+          ),
+        )}
+      </div>
+    );
+  }
+  return null;
+}
+
+/** Renders every non-scalar top-level field (skipping `exclude`) generically. */
+function NestedFields({
+  data,
+  exclude = [],
+}: {
+  data: Record<string, Json>;
+  exclude?: string[];
+}) {
+  const entries = Object.entries(data).filter(
+    ([key, value]) => !exclude.includes(key) && !isScalar(value) && !isBlank(value),
+  );
+  if (entries.length === 0) return null;
+  return (
+    <>
+      {entries.map(([key, value]) => (
+        <div key={key} className="space-y-1">
+          <SectionHeading>{formatKey(key)}</SectionHeading>
+          <NestedValue value={value} />
+        </div>
+      ))}
+    </>
+  );
+}
+
+/** students[] (Honesty Policy, Records Release): one small card per student. */
+function StudentList({ students }: { students: Json }) {
+  if (!Array.isArray(students) || students.length === 0) return null;
+  return (
+    <div className="space-y-1">
+      <SectionHeading>
+        {students.length === 1 ? "Student" : `Students (${students.length})`}
+      </SectionHeading>
+      <div className="space-y-2">
+        {students.map((s, i) => (
+          <div
+            key={i}
+            className="rounded-md border border-border/50 bg-secondary/30 p-2 space-y-1"
+          >
+            {isPlainObject(s) ? (
+              <>
+                {"student_name" in s && !isBlank(s.student_name) && (
+                  <p className="font-medium text-foreground">
+                    {asString(s.student_name)}
+                  </p>
+                )}
+                <NestedValue
+                  value={Object.fromEntries(
+                    Object.entries(s).filter(([k]) => k !== "student_name"),
+                  )}
+                />
+              </>
+            ) : (
+              <NestedValue value={s} />
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** core_grades / additional_subjects (Course Verification): [{subject, grade}] */
+function SubjectGradeTable({ title, rows }: { title: string; rows: Json }) {
+  if (!Array.isArray(rows)) return null;
+  const items = rows
+    .filter(isPlainObject)
+    .filter((r) => !isBlank(r.subject) || !isBlank(r.grade));
+  if (items.length === 0) return null;
+  return (
+    <div className="space-y-1">
+      <SectionHeading>{title}</SectionHeading>
+      <div className="overflow-x-auto rounded-md border border-border/50">
+        <table className="w-full text-sm">
+          <thead className="bg-secondary text-left">
+            <tr>
+              <th className="p-2">Subject</th>
+              <th className="p-2">Grade</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((r, i) => (
+              <tr key={i} className="border-t">
+                <td className="p-2">{asString(r.subject) || "—"}</td>
+                <td className="p-2">{asString(r.grade) || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/** pe_activity_log: weeks[] of { Sun..Sat: { checked, activity } } */
+function PeLogTable({ weeks }: { weeks: Json[] }) {
+  const normalized = weeks.map((w) => {
+    const row = isPlainObject(w) ? w : {};
+    return WEEKDAYS_MON_SUN.map((d) => {
+      const cell = row[d];
+      if (typeof cell === "boolean") return { checked: cell, activity: "" };
+      if (isPlainObject(cell))
+        return { checked: cell.checked === true, activity: asString(cell.activity).trim() };
+      return { checked: false, activity: "" };
+    });
+  });
+  const visible = normalized
+    .map((days, i) => ({ days, weekNumber: i + 1 }))
+    .filter(({ days }) => days.some((d) => d.checked || d.activity));
+  const totalChecked = normalized.reduce(
+    (sum, days) => sum + days.filter((d) => d.checked).length,
+    0,
+  );
+  const hiddenCount = normalized.length - visible.length;
+
+  return (
+    <div className="space-y-1">
+      <SectionHeading>Weekly Activity</SectionHeading>
+      {visible.length === 0 ? (
+        <p className="text-foreground/60">No activity entered for any week.</p>
+      ) : (
+        <div className="overflow-x-auto rounded-md border border-border/50">
+          <table className="w-full text-sm">
+            <thead className="bg-secondary text-left">
+              <tr>
+                <th className="p-2">Week</th>
+                {WEEKDAYS_MON_SUN.map((d) => (
+                  <th key={d} className="p-2 text-center">
+                    {d}
+                  </th>
+                ))}
+                <th className="p-2 text-center">Days</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map(({ days, weekNumber }) => (
+                <tr key={weekNumber} className="border-t align-top">
+                  <td className="p-2 whitespace-nowrap">Week {weekNumber}</td>
+                  {days.map((d, i) => (
+                    <td key={i} className="p-2 text-center">
+                      {d.checked && (
+                        <Check
+                          className="h-4 w-4 text-primary mx-auto"
+                          aria-label="Checked"
+                        />
+                      )}
+                      {d.activity && (
+                        <span className="block text-xs text-foreground/70">
+                          {d.activity}
+                        </span>
+                      )}
+                    </td>
+                  ))}
+                  <td className="p-2 text-center">
+                    {days.filter((d) => d.checked).length}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="flex flex-wrap justify-between gap-2 text-xs text-foreground/60">
+        <span>
+          {hiddenCount > 0
+            ? `Weeks with no entries are hidden (${hiddenCount} of ${normalized.length}).`
+            : `${normalized.length} weeks shown.`}
+        </span>
+        <span className="font-medium text-foreground">
+          Total checked days: {totalChecked} (≈{totalChecked * 30} min)
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/** music_practice_verification: weeks[] of { Sun..Sat: "minutes" } */
+function MusicPracticeTable({ weeks }: { weeks: Json[] }) {
+  const TARGET = 150; // minutes/week, per PortalMusicVerification
+  const normalized = weeks.map((w) => {
+    const row = isPlainObject(w) ? w : {};
+    return WEEKDAYS_MON_SUN.map((d) => asString(row[d]).trim());
+  });
+  const minutesOf = (v: string) => parseInt(v, 10) || 0;
+  const visible = normalized
+    .map((days, i) => ({
+      days,
+      weekNumber: i + 1,
+      total: days.reduce((s, v) => s + minutesOf(v), 0),
+    }))
+    .filter(({ days }) => days.some((v) => v !== ""));
+  const grandTotal = visible.reduce((s, w) => s + w.total, 0);
+  const hiddenCount = normalized.length - visible.length;
+
+  return (
+    <div className="space-y-1">
+      <SectionHeading>Practice Minutes</SectionHeading>
+      {visible.length === 0 ? (
+        <p className="text-foreground/60">No practice minutes entered.</p>
+      ) : (
+        <div className="overflow-x-auto rounded-md border border-border/50">
+          <table className="w-full text-sm">
+            <thead className="bg-secondary text-left">
+              <tr>
+                <th className="p-2">Week</th>
+                {WEEKDAYS_MON_SUN.map((d) => (
+                  <th key={d} className="p-2 text-center">
+                    {d}
+                  </th>
+                ))}
+                <th className="p-2 text-center">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map(({ days, weekNumber, total }) => (
+                <tr key={weekNumber} className="border-t">
+                  <td className="p-2 whitespace-nowrap">Week {weekNumber}</td>
+                  {days.map((v, i) => (
+                    <td key={i} className="p-2 text-center">
+                      {v || <span className="text-foreground/30">—</span>}
+                    </td>
+                  ))}
+                  <td
+                    className={cn(
+                      "p-2 text-center font-medium",
+                      total >= TARGET ? "text-primary" : "text-foreground/70",
+                    )}
+                  >
+                    {total}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="flex flex-wrap justify-between gap-2 text-xs text-foreground/60">
+        <span>
+          Minutes per day. Goal: {TARGET} min/week.
+          {hiddenCount > 0 &&
+            ` Weeks with no entries are hidden (${hiddenCount} of ${normalized.length}).`}
+        </span>
+        <span className="font-medium text-foreground">
+          Total: {grandTotal} min ({(grandTotal / 60).toFixed(1)} hrs)
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/** goal_card: rows[] of { subjectId, subjectName, goals: { Mon..Fri: { value, done } } } */
+function GoalCardTable({ rows }: { rows: Json[] }) {
+  const items = rows.filter(isPlainObject);
+  let doneCount = 0;
+  let goalCount = 0;
+  const normalized = items.map((r) => {
+    const goals = isPlainObject(r.goals) ? r.goals : {};
+    const days = WEEKDAYS_MON_FRI.map((d) => {
+      const g = goals[d];
+      const cell = isPlainObject(g)
+        ? { value: asString(g.value).trim(), done: g.done === true }
+        : { value: asString(g).trim(), done: false };
+      if (cell.value || cell.done) goalCount += 1;
+      if (cell.done) doneCount += 1;
+      return cell;
+    });
+    return { subject: asString(r.subjectName) || "Subject", days };
+  });
+
+  return (
+    <div className="space-y-1">
+      <SectionHeading>Daily Goals</SectionHeading>
+      {normalized.length === 0 ? (
+        <p className="text-foreground/60">No subjects added for this week.</p>
+      ) : (
+        <div className="overflow-x-auto rounded-md border border-border/50">
+          <table className="w-full text-sm">
+            <thead className="bg-secondary text-left">
+              <tr>
+                <th className="p-2">Subject</th>
+                {WEEKDAYS_MON_FRI.map((d) => (
+                  <th key={d} className="p-2 text-center">
+                    {d}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {normalized.map((row, i) => (
+                <tr key={i} className="border-t align-top">
+                  <td className="p-2">{row.subject}</td>
+                  {row.days.map((c, j) => (
+                    <td key={j} className="p-2 text-center">
+                      <span className="inline-flex items-center gap-1">
+                        {c.value || (!c.done && <span className="text-foreground/30">—</span>)}
+                        {c.done && (
+                          <Check className="h-4 w-4 text-primary" aria-label="Done" />
+                        )}
+                      </span>
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="text-xs text-foreground/60 text-right">
+        <span className="font-medium text-foreground">
+          Goals completed: {doneCount} of {goalCount}
+        </span>
+      </p>
+    </div>
+  );
+}
+
+function SubmissionDetails({ submission }: { submission: FormSubmission }) {
+  const data: Record<string, Json> = isPlainObject(submission.submitted_data)
+    ? submission.submitted_data
+    : {};
+
+  switch (submission.form_type) {
+    // { father_name, mother_name, mailing_address, shipping_address, phone,
+    //   email, supervisor_name, supervisor_familiar_with_ace (bool),
+    //   student_name, student_gender, student_birthdate, last_school_attended,
+    //   last_grade_completed, last_grade_when } -- all scalars
+    case "enrollment_agreement":
+      return (
+        <>
+          <ScalarFields data={data} />
+          <NestedFields data={data} />
+        </>
+      );
+
+    // { release_date, requesting_school_name, requesting_school_address,
+    //   students: [{ student_name, birthdate, grade_level_at_withdrawal }] }
+    // honesty_policy: { students: [{ student_name, student_signature }] }
+    case "records_release":
+    case "honesty_policy":
+      return (
+        <>
+          <ScalarFields data={data} />
+          <StudentList students={data.students} />
+          <NestedFields data={data} exclude={["students"]} />
+        </>
+      );
+
+    // { student_name, age, last_grade_completed, address,
+    //   parent_guardian_name, core_grades: [{subject, grade}],
+    //   additional_subjects: [{subject, grade}], days_per_week, hours_per_day,
+    //   started_next_grade, weeks_completed, comments }
+    case "elementary_course_verification":
+      return (
+        <>
+          <ScalarFields data={data} />
+          <SubjectGradeTable title="Core Subjects" rows={data.core_grades} />
+          <SubjectGradeTable
+            title="Additional Subjects"
+            rows={data.additional_subjects}
+          />
+          <NestedFields
+            data={data}
+            exclude={["core_grades", "additional_subjects"]}
+          />
+        </>
+      );
+
+    // { week_start, rows: [{ subjectId, subjectName, goals: {Mon..Fri: {value, done}} }] }
+    case "goal_card": {
+      const weekStart = asString(data.week_start);
+      return (
+        <>
+          {weekStart && (
+            <FieldRow
+              label="Week Of"
+              value={
+                /^\d{4}-\d{2}-\d{2}$/.test(weekStart)
+                  ? new Date(`${weekStart}T00:00:00`).toLocaleDateString()
+                  : weekStart
+              }
+            />
+          )}
+          <ScalarFields data={data} exclude={["week_start"]} />
+          {Array.isArray(data.rows) ? (
+            <GoalCardTable rows={data.rows} />
+          ) : null}
+          <NestedFields
+            data={data}
+            exclude={Array.isArray(data.rows) ? ["rows"] : []}
+          />
+        </>
+      );
+    }
+
+    // { school_year, quarter, weeks: [{Sun..Sat: {checked, activity}}], verification }
+    case "pe_activity_log":
+      return (
+        <>
+          <ScalarFields data={data} />
+          {Array.isArray(data.weeks) ? <PeLogTable weeks={data.weeks} /> : null}
+          <NestedFields
+            data={data}
+            exclude={Array.isArray(data.weeks) ? ["weeks"] : []}
+          />
+        </>
+      );
+
+    // { school_year, quarter, from_date, to_date, weeks: [{Sun..Sat: "minutes"}],
+    //   practice_verification, performance_title, instrument, performance_date,
+    //   parent_signature, pastor_teacher_signature }
+    case "music_practice_verification":
+      return (
+        <>
+          <ScalarFields data={data} />
+          {Array.isArray(data.weeks) ? (
+            <MusicPracticeTable weeks={data.weeks} />
+          ) : null}
+          <NestedFields
+            data={data}
+            exclude={Array.isArray(data.weeks) ? ["weeks"] : []}
+          />
+        </>
+      );
+
+    // Unknown form type: render everything generically.
+    default:
+      return (
+        <>
+          <ScalarFields data={data} />
+          <NestedFields data={data} />
+        </>
+      );
+  }
+}
+
 function FormSubmissionCard({ submission }: { submission: FormSubmission }) {
   const [expanded, setExpanded] = useState(false);
-  const isSummaryOnly = SUMMARY_ONLY_TYPES.has(submission.form_type);
+  const hasData =
+    isPlainObject(submission.submitted_data) &&
+    !isBlank(submission.submitted_data);
 
   return (
     <div className="rounded-lg border border-border/50 bg-background p-4">
@@ -135,7 +707,7 @@ function FormSubmissionCard({ submission }: { submission: FormSubmission }) {
       >
         <div>
           <p className="font-medium text-foreground">
-            {FORM_TYPE_LABELS[submission.form_type] ?? submission.form_type}
+            {FORM_TYPE_LABELS[submission.form_type] ?? formatKey(submission.form_type)}
           </p>
           <p className="text-xs text-foreground/50">
             Signed by {submission.signer_name} on{" "}
@@ -151,27 +723,11 @@ function FormSubmissionCard({ submission }: { submission: FormSubmission }) {
 
       {expanded && (
         <div className="mt-3 pt-3 border-t border-border/50 space-y-2 text-sm">
-          {isSummaryOnly && (
-            <p className="text-foreground/60">
-              This form tracks recurring/weekly data. Raw submitted data below.
-            </p>
+          {hasData ? (
+            <SubmissionDetails submission={submission} />
+          ) : (
+            <p className="text-foreground/60">No data was entered on this form.</p>
           )}
-          {Object.entries(submission.submitted_data).map(([key, value]) => {
-            if (
-              Array.isArray(value) ||
-              (typeof value === "object" && value !== null)
-            )
-              return null;
-            if (value === null || value === "" || value === false) return null;
-            return (
-              <div key={key} className="flex justify-between gap-4">
-                <span className="text-foreground/50">{formatKey(key)}</span>
-                <span className="text-foreground text-right">
-                  {String(value)}
-                </span>
-              </div>
-            );
-          })}
           <details className="mt-2">
             <summary className="cursor-pointer text-xs text-primary">
               View raw submitted data
