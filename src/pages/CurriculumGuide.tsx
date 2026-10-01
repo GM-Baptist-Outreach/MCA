@@ -117,6 +117,13 @@ const CurriculumGuide = () => {
       });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.ok) {
+        // A 400 is a validation problem the visitor can fix, so show it as-is.
+        if (res.status === 400 && typeof data?.error === "string") {
+          setSubmitError(data.error);
+          toast({ title: "Please check the form", description: data.error, variant: "destructive" });
+          setIsSubmitting(false);
+          return;
+        }
         throw new Error(data?.error || `Request failed (${res.status})`);
       }
     } catch (err) {

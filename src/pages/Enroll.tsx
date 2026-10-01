@@ -219,8 +219,19 @@ const Enroll = () => {
       return;
     }
 
+    // The grade picker is not a native input, so the browser can't enforce
+    // it. A blank grade would be treated as Kindergarten and not charged.
+    const missingGrade = formData.students.findIndex((s) => !s.lastGradeCompleted);
+    if (missingGrade !== -1) {
+      toast({
+        title: "Last grade completed is required",
+        description: `Please choose the last grade completed for Student ${missingGrade + 1}.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
     setIsSubmitting(true);
-    console.log("[MCA enroll] submitting checkout request...", { formData });
 
     try {
       const res = await fetch(
@@ -251,9 +262,7 @@ const Enroll = () => {
         },
       );
 
-      console.log("[MCA enroll] response status:", res.status);
       const data = await res.json();
-      console.log("[MCA enroll] response body:", data);
 
       if (!res.ok || data.error) {
         toast({

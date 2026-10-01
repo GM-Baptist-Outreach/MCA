@@ -200,7 +200,7 @@ const AdminCompEnroll = () => {
         </h2>
         <p className="text-sm text-foreground/60">
           Creates a real family, students, and enrollment records — the same way
-          a paid enrollment does, including the GHL contact and confirmation
+          a paid enrollment does, including the CRM contact and confirmation
           email — but with no Stripe charge. Every enrollment created here is
           permanently marked as a comp enrollment ($0) so it's never mistaken
           for real revenue in any list or report.
@@ -522,7 +522,7 @@ const AdminCompEnroll = () => {
             <AlertDialogDescription>
               This creates a real family and enrollment record —{" "}
               {parentFirstName} {parentLastName} will get the same welcome email
-              a paying family gets, and this will show up in GHL. Every
+              a paying family gets, and this will show up in the CRM. Every
               enrollment record is permanently marked{" "}
               <strong>
                 $0 / comp — {compReason ? COMP_REASON_LABELS[compReason] : ""}
