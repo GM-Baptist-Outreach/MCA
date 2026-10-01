@@ -2,9 +2,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Mail, Phone, MapPin } from "lucide-react";
+import { Mail, Phone, MapPin, CheckCircle2 } from "lucide-react";
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
+
+const SUPABASE_URL = "https://proiyioqfbjcmprsnqhf.supabase.co";
 
 type StandardTrackingFieldKey = string;
 type RegisteredCustomFieldId = string;
@@ -86,13 +88,51 @@ const Contact = () => {
     phone: "",
     message: "",
   });
+  const [honeypot, setHoneypot] = useState("");
+  const [isSubmitted, setIsSubmitted] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     setIsSubmitting(true);
+    setSubmitError(null);
 
-    const [firstName, ...lastNameParts] = formData.name.split(" ");
+    const [firstName, ...lastNameParts] = formData.name.trim().split(/\s+/);
     const lastName = lastNameParts.join(" ");
+
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/submit-website-form`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          form: "contact",
+          first_name: firstName || "",
+          last_name: lastName || "",
+          email: formData.email,
+          phone: formData.phone,
+          message: formData.message,
+          page_url: window.location.href,
+          website: honeypot,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.ok) {
+        throw new Error(data?.error || `Request failed (${res.status})`);
+      }
+    } catch (err) {
+      console.error("[MCA contact] submit failed", err);
+      const message =
+        "We couldn't send your message. Please try again, or call (844) 663-4477 or email David@midwestchristianacademy.com.";
+      setSubmitError(message);
+      toast({
+        title: "Something went wrong",
+        description: message,
+        variant: "destructive",
+      });
+      setIsSubmitting(false);
+      return;
+    }
 
     const trackingPayload = {
       type: "external_form_submission",
@@ -126,16 +166,27 @@ const Contact = () => {
       },
     };
 
-    postTrackingEvent(trackingPayload);
+    try {
+      postTrackingEvent(trackingPayload);
+    } catch {
+      // Analytics only - never block the success state.
+    }
 
     toast({
       title: "Message Sent",
       description: "Thank you for reaching out. We will get back to you soon.",
     });
-
-    setFormData({ name: "", email: "", phone: "", message: "" });
+    setIsSubmitted(true);
     setIsSubmitting(false);
   };
+
+  const resetForm = () => {
+    setFormData({ name: "", email: "", phone: "", message: "" });
+    setHoneypot("");
+    setSubmitError(null);
+    setIsSubmitted(false);
+  };
+
   return (
     <div className="flex flex-col min-h-screen bg-background">
       <section className="bg-primary text-primary-foreground py-16 lg:py-24">
@@ -273,71 +324,124 @@ const Contact = () => {
             </div>
 
             <div className="bg-secondary p-8 rounded-2xl border border-border/50">
-              <h3 className="text-2xl font-bold font-serif text-primary mb-6">
-                Send a Message
-              </h3>
-              <form className="space-y-6" onSubmit={handleSubmit}>
-                <div className="space-y-2">
-                  <Label htmlFor="name">Full Name</Label>
-                  <Input
-                    id="name"
-                    placeholder="Your name"
-                    className="bg-background"
-                    value={formData.name}
-                    onChange={(e) =>
-                      setFormData({ ...formData, name: e.target.value })
-                    }
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="email">Email Address</Label>
-                  <Input
-                    id="email"
-                    type="email"
-                    placeholder="Your email address"
-                    className="bg-background"
-                    value={formData.email}
-                    onChange={(e) =>
-                      setFormData({ ...formData, email: e.target.value })
-                    }
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="phone">Phone Number</Label>
-                  <Input
-                    id="phone"
-                    type="tel"
-                    placeholder="Your phone number"
-                    className="bg-background"
-                    value={formData.phone}
-                    onChange={(e) =>
-                      setFormData({ ...formData, phone: e.target.value })
-                    }
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="message">Message</Label>
-                  <Textarea
-                    id="message"
-                    placeholder="How can we help you?"
-                    className="min-h-[120px] bg-background"
-                    value={formData.message}
-                    onChange={(e) =>
-                      setFormData({ ...formData, message: e.target.value })
-                    }
-                    required
-                  />
-                </div>
-                <Button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="w-full bg-primary text-primary-foreground hover:bg-primary/90 text-lg py-6"
+              {isSubmitted ? (
+                <div
+                  role="status"
+                  className="flex flex-col items-center text-center py-8"
                 >
-                  {isSubmitting ? "Sending..." : "Send Message"}
-                </Button>
-              </form>
+                  <div className="h-16 w-16 rounded-full bg-accent/20 flex items-center justify-center mb-6">
+                    <CheckCircle2 className="h-9 w-9 text-accent" />
+                  </div>
+                  <h3 className="text-2xl font-bold font-serif text-primary mb-3">
+                    You're all set!
+                  </h3>
+                  <p className="text-foreground/80 leading-relaxed mb-8 max-w-sm">
+                    Thanks for reaching out
+                    {formData.name.trim() ? `, ${formData.name.trim().split(/\s+/)[0]}` : ""}.
+                    We received your message and will get back to you at{" "}
+                    <span className="font-semibold">{formData.email}</span>{" "}
+                    soon.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={resetForm}
+                    className="text-sm text-primary underline underline-offset-4 hover:text-accent transition-colors"
+                  >
+                    Submit another
+                  </button>
+                </div>
+              ) : (
+                <>
+                <h3 className="text-2xl font-bold font-serif text-primary mb-6">
+                  Send a Message
+                </h3>
+                <form className="space-y-6" onSubmit={handleSubmit}>
+                  <div
+                    aria-hidden="true"
+                    className="absolute -left-[10000px] top-auto h-px w-px overflow-hidden"
+                  >
+                    <label htmlFor="website">Website</label>
+                    <input
+                      id="website"
+                      name="website"
+                      type="text"
+                      tabIndex={-1}
+                      autoComplete="off"
+                      value={honeypot}
+                      onChange={(e) => setHoneypot(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="name">Full Name</Label>
+                    <Input
+                      id="name"
+                      placeholder="Your name"
+                      className="bg-background"
+                      value={formData.name}
+                      onChange={(e) =>
+                        setFormData({ ...formData, name: e.target.value })
+                      }
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="email">Email Address</Label>
+                    <Input
+                      id="email"
+                      type="email"
+                      placeholder="Your email address"
+                      className="bg-background"
+                      value={formData.email}
+                      onChange={(e) =>
+                        setFormData({ ...formData, email: e.target.value })
+                      }
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="phone">Phone Number</Label>
+                    <Input
+                      id="phone"
+                      type="tel"
+                      placeholder="Your phone number"
+                      className="bg-background"
+                      value={formData.phone}
+                      onChange={(e) =>
+                        setFormData({ ...formData, phone: e.target.value })
+                      }
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="message">Message</Label>
+                    <Textarea
+                      id="message"
+                      placeholder="How can we help you?"
+                      className="min-h-[120px] bg-background"
+                      value={formData.message}
+                      onChange={(e) =>
+                        setFormData({ ...formData, message: e.target.value })
+                      }
+                      required
+                    />
+                  </div>
+                  {submitError && (
+                    <p
+                      role="alert"
+                      className="text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded-md px-4 py-3"
+                    >
+                      {submitError}
+                    </p>
+                  )}
+                  <Button
+                    type="submit"
+                    disabled={isSubmitting}
+                    className="w-full bg-primary text-primary-foreground hover:bg-primary/90 text-lg py-6"
+                  >
+                    {isSubmitting ? "Sending..." : "Send Message"}
+                  </Button>
+                </form>
+                </>
+              )}
             </div>
           </div>
         </div>
