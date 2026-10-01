@@ -5,13 +5,22 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 // course_completions and graduation_requirements (there is no separate
 // academic_projection table).
 //
-// Cron (date-gated; no-ops before 2027-07-01):
+// Cron (date-gated; no-ops before 2027-07-01). pg_cron job
+// mca-represcribe-school-year runs '10 12 1 7 *' (July 1, 12:10 UTC):
 //   POST /functions/v1/represcribe-school-year
-//   x-cron-secret: $CRON_SECRET
+//   x-cron-secret: CRON_SECRET env, or the Vault secret (mca_get_cron_secret)
 //   {}
 //
-// Admin can run early with { "force": true, "student_id"?: "...",
-// "source_school_year"?: "2026-27", "target_school_year"?: "2027-28" }.
+// Defaults (Round 3 F3, marker MCA_R3_F3_REPRESCRIBE): on July 1 the current
+// school year is already the NEW year, so target = current school year and
+// source = the year before it. Admin can run early with { "force": true,
+// "student_id"?: "...", "source_school_year"?: "2026-27",
+// "target_school_year"?: "2027-28" }.
+//
+// High school: transfer credits (course_completions.is_transfer) count as
+// finished even without a grade, completions match a requirement by
+// coalesce(fulfills_requirement, subject_name), and a student's own
+// student_graduation_requirements list replaces the shared template.
 //
 // Elementary: for each subject already logged, prescribe the next 12
 // catalog PACEs after the highest pace_number (items.pace_number, internal
@@ -44,6 +53,13 @@ function nextSchoolYear(schoolYear: string): string {
   return `${start}-${String(start + 1).slice(-2)}`;
 }
 
+function previousSchoolYear(schoolYear: string): string {
+  const match = schoolYear.match(/^(\d{4})-/);
+  if (!match) return schoolYear;
+  const start = Number(match[1]) - 1;
+  return `${start}-${String(start + 1).slice(-2)}`;
+}
+
 function currentSchoolYear(date = new Date()): string {
   const year = date.getMonth() >= 6 ? date.getFullYear() : date.getFullYear() - 1;
   return `${year}-${String(year + 1).slice(-2)}`;
@@ -53,6 +69,19 @@ async function assertAdminOrCron(req: Request) {
   const cronSecret = Deno.env.get("CRON_SECRET");
   const headerSecret = req.headers.get("x-cron-secret");
   if (cronSecret && headerSecret && headerSecret === cronSecret) return null;
+  if (headerSecret) {
+    // pg_cron reads the same secret from Vault (mca_cron_secret), so accept it
+    // even when the CRON_SECRET env var is not set.
+    const service = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+    const { data: vaultSecret } = await service.rpc("mca_get_cron_secret");
+    if (typeof vaultSecret === "string" && vaultSecret && headerSecret === vaultSecret) {
+      return null;
+    }
+    return json({ error: "Unauthorized" }, 401);
+  }
   const auth = req.headers.get("Authorization");
   if (!auth) return json({ error: "Unauthorized" }, 401);
   const userClient = createClient(
@@ -83,8 +112,11 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    const sourceYear: string = body.source_school_year ?? currentSchoolYear();
-    const targetYear: string = body.target_school_year ?? nextSchoolYear(sourceYear);
+    const bodySource: string | undefined = body.source_school_year;
+    const bodyTarget: string | undefined = body.target_school_year;
+    const targetYear: string =
+      bodyTarget ?? (bodySource ? nextSchoolYear(bodySource) : currentSchoolYear());
+    const sourceYear: string = bodySource ?? previousSchoolYear(targetYear);
     const onlyStudent: string | undefined = body.student_id;
 
     const admin = createClient(
@@ -255,23 +287,45 @@ async function prescribeHighSchool(
   targetYear: string,
   subjectByName: Map<string, { id: string; name: string }>,
 ) {
-  const [{ data: completions }, { data: requirements }] = await Promise.all([
+  const [
+    { data: completions, error: completionsError },
+    { data: template },
+    { data: customRequirements },
+  ] = await Promise.all([
     admin
       .from("course_completions")
-      .select("subject_name, final_average")
+      .select("subject_name, final_average, is_transfer, fulfills_requirement")
       .eq("student_id", studentId),
     admin.from("graduation_requirements").select("subject_name").order("sort_order"),
+    admin
+      .from("student_graduation_requirements")
+      .select("subject_name")
+      .eq("student_id", studentId)
+      .order("sort_order"),
   ]);
+  if (completionsError) throw completionsError;
+  const requirements =
+    customRequirements && customRequirements.length > 0 ? customRequirements : template;
+
+  type CompletionRow = {
+    subject_name: string | null;
+    final_average: number | null;
+    is_transfer: boolean | null;
+    fulfills_requirement: string | null;
+  };
+  const rows = (completions ?? []) as CompletionRow[];
+  const isFinished = (row: CompletionRow) => row.is_transfer === true || row.final_average != null;
 
   const names = new Set<string>();
-  for (const row of completions ?? []) {
-    if (row.final_average == null && row.subject_name) names.add(row.subject_name);
+  for (const row of rows) {
+    if (!isFinished(row) && row.subject_name) names.add(row.subject_name);
   }
-  const finished = new Set(
-    (completions ?? [])
-      .filter((row) => row.final_average != null && row.subject_name)
-      .map((row) => row.subject_name.trim().toLowerCase()),
-  );
+  const finished = new Set<string>();
+  for (const row of rows) {
+    if (!isFinished(row)) continue;
+    if (row.subject_name) finished.add(row.subject_name.trim().toLowerCase());
+    if (row.fulfills_requirement) finished.add(row.fulfills_requirement.trim().toLowerCase());
+  }
   for (const requirement of requirements ?? []) {
     const key = requirement.subject_name.trim().toLowerCase();
     if (!finished.has(key)) names.add(requirement.subject_name);
