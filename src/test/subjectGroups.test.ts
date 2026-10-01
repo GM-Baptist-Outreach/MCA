@@ -336,3 +336,22 @@ describe("pick list companions and stock", () => {
     expect(trackedStock(4)).toEqual({ quantityOnHand: 4, backordered: false });
   });
 });
+
+describe("course-list headings (round 2)", () => {
+  it("puts list courses under the heading David's course list uses", () => {
+    expect(subjectGroup("NT Church History")).toBe("Electives");
+    expect(subjectGroup("Life of Christ")).toBe("Electives");
+    expect(subjectGroup("Accounting")).toBe("Math");
+    expect(subjectGroup("General Business")).toBe("Math");
+    expect(subjectGroup("Health")).toBe("Science");
+    expect(subjectGroup("Collectivism")).toBe("Social Studies");
+    expect(subjectGroup("World History")).toBe("Social Studies");
+  });
+  it("orders core subjects first, then electives A-Z", () => {
+    const names = ["Speech", "NT Church History", "Health", "Math", "Collectivism", "Accounting", "English", "Bible Reading", "Word Building", "Science", "Social Studies"];
+    expect(names.slice().sort(compareSubjectNames)).toEqual([
+      "Math", "Accounting", "English", "Word Building", "Science", "Health", "Social Studies", "Collectivism",
+      "Bible Reading", "NT Church History", "Speech",
+    ]);
+  });
+});

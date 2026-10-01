@@ -2,6 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import {
   applyTemplate,
+  escapeHtml,
   PORTAL_LOGIN_URL,
   renderTemplate,
   SAMPLE_TEMPLATE_VARS,
@@ -186,6 +187,19 @@ async function assertAdminOrCron(
   const cronSecret = Deno.env.get("CRON_SECRET");
   const headerSecret = req.headers.get("x-cron-secret");
   if (cronSecret && headerSecret && headerSecret === cronSecret) return { ok: true };
+  if (headerSecret) {
+    // pg_cron jobs read the same secret from Vault (mca_cron_secret), so the
+    // function accepts it even when the CRON_SECRET env var is not set.
+    const service = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+    const { data: vaultSecret } = await service.rpc("mca_get_cron_secret");
+    if (typeof vaultSecret === "string" && vaultSecret && headerSecret === vaultSecret) {
+      return { ok: true };
+    }
+    return { ok: false, response: json({ error: "Unauthorized" }, 401) };
+  }
 
   const auth = req.headers.get("Authorization");
   if (!auth) {
@@ -292,6 +306,16 @@ Deno.serve(async (req: Request) => {
       if (!subject || !html) return json({ error: "Subject and body are required." }, 400);
       const sent = await sendResendEmail({ to, subject, html });
       return json({ sent, to });
+    }
+    if (body.action === "notify_resource_books") {
+      const service = createClient(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+      );
+      const result = await notifyPendingResourceBooks(service, {
+        studentId: typeof body.student_id === "string" ? body.student_id : undefined,
+      });
+      return json(result);
     }
     const onlyStudent: string | undefined = body.student_id;
     const schoolYear: string | undefined = body.school_year;
@@ -474,7 +498,8 @@ async function buildForSchedule(
   const { data: catalogRows, error: catalogError } = await admin
     .from("items")
     .select("id, subject_id, item_type, range_start, range_end, original_name, sales_price, subjects(name)")
-    .in("item_type", ["key", "other"]);
+    .in("item_type", ["key", "other"])
+    .eq("active", true);
   if (catalogError) throw catalogError;
   const catalog: CatalogItem[] = (catalogRows ?? []).map((row) => ({
     id: row.id,
@@ -665,7 +690,7 @@ async function recordResourceBooks(
     .map((book) => {
       const price = Number(book.sales_price ?? 0);
       const title = book.original_name || "Book";
-      return `<li>${title} – $${price.toFixed(2)}</li>`;
+      return `<li>${escapeHtml(title)} – $${price.toFixed(2)}</li>`;
     })
     .join("")}</ul>`;
   const rendered = await renderTemplate(admin, "resource_book_needed", {
@@ -689,4 +714,128 @@ async function recordResourceBooks(
   return {
     titles: unsent.map((book) => book.original_name || "Book"),
   };
+}
+
+/**
+ * Emails parents about resource books recorded in resource_book_notices that
+ * have not been emailed yet. The daily pg_cron SQL generator records notices
+ * but cannot send email, so a second cron job calls this action afterwards.
+ * One email per student and school year. Books the family already bought in
+ * the store are marked notified without an email.
+ */
+async function notifyPendingResourceBooks(
+  admin: SupabaseClient,
+  options: { studentId?: string },
+): Promise<{ students: number; emailed: number; results: unknown[] }> {
+  let query = admin
+    .from("resource_book_notices")
+    .select(
+      "student_id, item_id, school_year, pick_list_id, items(original_name, sales_price, active)",
+    )
+    .is("notified_at", null);
+  if (options.studentId) query = query.eq("student_id", options.studentId);
+  const { data: pending, error } = await query;
+  if (error) throw error;
+
+  const groups = new Map<string, Array<NonNullable<typeof pending>[number]>>();
+  for (const row of pending ?? []) {
+    const key = `${row.student_id}|${row.school_year}`;
+    const list = groups.get(key) ?? [];
+    list.push(row);
+    groups.set(key, list);
+  }
+
+  const site = Deno.env.get("SITE_URL") || "https://mcahomeschool.com";
+  const results: unknown[] = [];
+  let emailedCount = 0;
+  for (const [key, rows] of groups) {
+    const [studentId, schoolYear] = key.split("|");
+    const { data: student } = await admin
+      .from("students")
+      .select("id, student_name, families(email)")
+      .eq("id", studentId)
+      .maybeSingle();
+    const familyRel = student?.families as { email: string } | { email: string }[] | null;
+    const family = Array.isArray(familyRel) ? familyRel[0] : familyRel;
+    const email = family?.email ?? null;
+    if (!email) {
+      results.push({ student_id: studentId, skipped: "no parent email" });
+      continue;
+    }
+
+    const bought = new Set<string>();
+    const { data: orders } = await admin
+      .from("orders")
+      .select("id, order_items(item_id)")
+      .ilike("customer_email", email)
+      .neq("status", "cancelled");
+    for (const order of orders ?? []) {
+      const lines = order.order_items as Array<{ item_id: string }> | null;
+      for (const line of lines ?? []) bought.add(line.item_id);
+    }
+
+    const books = rows
+      .map((row) => {
+        const rel = row.items as
+          | { original_name: string | null; sales_price: number | null; active: boolean | null }
+          | Array<{ original_name: string | null; sales_price: number | null; active: boolean | null }>
+          | null;
+        const item = Array.isArray(rel) ? rel[0] : rel;
+        return { id: row.item_id as string, item };
+      })
+      .filter((book) => book.item && book.item.active !== false);
+    const skipped = rows
+      .map((row) => row.item_id as string)
+      .filter((id) => bought.has(id) || !books.some((book) => book.id === id));
+    const toSend = books.filter((book) => !bought.has(book.id));
+    const now = new Date().toISOString();
+
+    if (skipped.length > 0) {
+      await admin
+        .from("resource_book_notices")
+        .update({ notified_at: now })
+        .eq("student_id", studentId)
+        .eq("school_year", schoolYear)
+        .in("item_id", skipped);
+    }
+    if (toSend.length === 0) {
+      results.push({ student_id: studentId, skipped: "already bought or inactive", items: skipped.length });
+      continue;
+    }
+
+    const storeUrl = `${site}/store?add=${toSend.map((book) => book.id).join(",")}`;
+    const bookList = `<ul>${toSend
+      .map((book) => {
+        const price = Number(book.item?.sales_price ?? 0);
+        const title = book.item?.original_name || "Book";
+        return `<li>${escapeHtml(title)} – $${price.toFixed(2)}</li>`;
+      })
+      .join("")}</ul>`;
+    const rendered = await renderTemplate(admin, "resource_book_needed", {
+      student_name: student?.student_name ?? "your student",
+      book_list: bookList,
+      store_url: storeUrl,
+    }, BOOK_NEEDED_FALLBACK);
+    const emailed = await sendResendEmail({
+      to: email,
+      subject: rendered.subject,
+      html: rendered.html,
+    });
+    if (emailed) {
+      emailedCount += 1;
+      await admin
+        .from("resource_book_notices")
+        .update({ notified_at: now })
+        .eq("student_id", studentId)
+        .eq("school_year", schoolYear)
+        .in("item_id", toSend.map((book) => book.id));
+    }
+    console.log("[generate-pick-lists] resource book notice", {
+      student_id: studentId,
+      emailed,
+      books: toSend.length,
+    });
+    results.push({ student_id: studentId, emailed, books: toSend.length });
+  }
+  return { students: groups.size, emailed: emailedCount, results };
 }
