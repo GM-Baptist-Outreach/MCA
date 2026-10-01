@@ -28,6 +28,16 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
 import { Upload, Download } from "lucide-react";
 import { compareSubjectNames, compareSubjects, subjectDisplayName } from "@/lib/loggedCourses";
 
@@ -55,8 +65,366 @@ interface Item {
   sales_price: number;
   purchase_price: number | null;
   active: boolean;
+  is_featured?: boolean | null;
+  short_description?: string | null;
+  image_path?: string | null;
   subjects: { name: string } | null;
   quantity_on_hand: number | null;
+}
+
+// Round 3 A3: full item editor with photo + short description.
+export const MCA_R3_A3_MARKER = "MCA_R3_A3_ITEM_EDIT";
+export const STORE_IMAGE_BUCKET = "store-item-images";
+
+export function storeImageUrl(path: string | null | undefined): string | null {
+  if (!path) return null;
+  if (/^https?:\/\//.test(path)) return path;
+  return supabase.storage.from(STORE_IMAGE_BUCKET).getPublicUrl(path).data.publicUrl;
+}
+
+/** Downscale to max 1200px on the long side; returns a JPEG/WebP blob. */
+async function resizeImage(file: File, maxSide = 1200): Promise<Blob> {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error("Couldn't read that image."));
+      el.src = url;
+    });
+    const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(img.width * scale);
+    canvas.height = Math.round(img.height * scale);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return file;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const type = file.type === "image/png" ? "image/png" : "image/jpeg";
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, type, 0.85));
+    return blob ?? file;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+interface ItemDraft {
+  original_name: string;
+  short_description: string;
+  subject_id: string;
+  item_type: ItemType;
+  pace_number: string;
+  range_start: string;
+  range_end: string;
+  grade_level: string;
+  publisher: string;
+  sku: string;
+  sales_price: string;
+  purchase_price: string;
+  is_featured: boolean;
+  active: boolean;
+}
+
+function draftFromItem(item: Item): ItemDraft {
+  return {
+    original_name: item.original_name,
+    short_description: item.short_description ?? "",
+    subject_id: item.subject_id ?? "",
+    item_type: item.item_type,
+    pace_number: item.pace_number != null ? String(item.pace_number) : "",
+    range_start: item.range_start != null ? String(item.range_start) : "",
+    range_end: item.range_end != null ? String(item.range_end) : "",
+    grade_level: item.grade_level != null ? String(item.grade_level) : "",
+    publisher: item.publisher ?? "",
+    sku: item.sku,
+    sales_price: String(item.sales_price),
+    purchase_price: item.purchase_price != null ? String(item.purchase_price) : "",
+    is_featured: !!item.is_featured,
+    active: item.active,
+  };
+}
+
+function intOrNull(v: string): number | null {
+  if (v.trim() === "") return null;
+  const n = parseInt(v, 10);
+  return isNaN(n) ? null : n;
+}
+
+function ItemEditDialog({
+  item,
+  subjects,
+  adminUserId,
+  onClose,
+  onSaved,
+}: {
+  item: Item;
+  subjects: Subject[];
+  adminUserId: string | null;
+  onClose: () => void;
+  onSaved: (updated: Item) => void;
+}) {
+  const [draft, setDraft] = useState<ItemDraft>(() => draftFromItem(item));
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(storeImageUrl(item.image_path));
+  const [removeImage, setRemoveImage] = useState(false);
+  const [referenced, setReferenced] = useState<boolean | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let ignore = false;
+    const check = async () => {
+      const results = await Promise.all([
+        supabase.from("order_items").select("id", { count: "exact", head: true }).eq("item_id", item.id),
+        supabase.from("student_pace_slots").select("id", { count: "exact", head: true }).eq("item_id", item.id),
+        supabase.from("pick_list_items").select("id", { count: "exact", head: true }).eq("item_id", item.id),
+      ]);
+      if (ignore) return;
+      setReferenced(results.some((r) => (r.count ?? 0) > 0 || !!r.error));
+    };
+    check();
+    return () => {
+      ignore = true;
+    };
+  }, [item.id]);
+
+  useEffect(() => {
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  const locked = referenced !== false;
+  const set = <K extends keyof ItemDraft>(key: K, value: ItemDraft[K]) =>
+    setDraft((prev) => ({ ...prev, [key]: value }));
+
+  const save = async () => {
+    setErr(null);
+    const price = parseFloat(draft.sales_price);
+    if (!draft.original_name.trim()) return setErr("Name is required.");
+    if (isNaN(price) || price < 0) return setErr("Enter a valid price.");
+    if (draft.short_description.length > 300) return setErr("Short description is 300 characters max.");
+    if (!draft.sku.trim()) return setErr("SKU is required.");
+    setSaving(true);
+
+    let imagePath: string | null | undefined = undefined;
+    if (file) {
+      try {
+        const blob = await resizeImage(file);
+        const ext = blob.type === "image/png" ? "png" : "jpg";
+        const path = `items/${item.id}/${Date.now()}.${ext}`;
+        const { error: upErr } = await supabase.storage
+          .from(STORE_IMAGE_BUCKET)
+          .upload(path, blob, { contentType: blob.type, upsert: false });
+        if (upErr) throw upErr;
+        imagePath = path;
+      } catch (e) {
+        setErr(`Photo upload failed: ${e instanceof Error ? e.message : String(e)}`);
+        setSaving(false);
+        return;
+      }
+    } else if (removeImage) {
+      imagePath = null;
+    }
+
+    const purchase = draft.purchase_price.trim() === "" ? null : parseFloat(draft.purchase_price);
+    const patch: Record<string, unknown> = {
+      original_name: draft.original_name.trim(),
+      short_description: draft.short_description.trim() || null,
+      grade_level: intOrNull(draft.grade_level),
+      publisher: draft.publisher.trim() || null,
+      sku: draft.sku.trim(),
+      sales_price: price,
+      purchase_price: purchase != null && !isNaN(purchase) ? purchase : null,
+      is_featured: draft.is_featured,
+      active: draft.active,
+      updated_at: new Date().toISOString(),
+    };
+    if (!locked) {
+      patch.subject_id = draft.subject_id || null;
+      patch.item_type = draft.item_type;
+      patch.pace_number = intOrNull(draft.pace_number);
+      patch.range_start = intOrNull(draft.range_start);
+      patch.range_end = intOrNull(draft.range_end);
+    }
+    if (imagePath !== undefined) patch.image_path = imagePath;
+
+    const { error: updateError } = await supabase.from("items").update(patch).eq("id", item.id);
+    if (updateError) {
+      setErr(updateError.message);
+      setSaving(false);
+      return;
+    }
+    if (adminUserId && price !== item.sales_price) {
+      await supabase.from("price_change_log").insert({
+        item_id: item.id,
+        changed_by: adminUserId,
+        change_source: "manual",
+        old_price: item.sales_price,
+        new_price: price,
+      });
+    }
+    const subjectName = subjects.find((sub) => sub.id === (patch.subject_id ?? item.subject_id))?.name;
+    onSaved({
+      ...item,
+      ...(patch as Partial<Item>),
+      subjects: subjectName ? { name: subjectName } : item.subjects,
+    });
+    setSaving(false);
+  };
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" data-marker={MCA_R3_A3_MARKER}>
+        <DialogHeader>
+          <DialogTitle>Edit item</DialogTitle>
+          <DialogDescription>
+            Changes show in the store right away. Photos are resized to 1200px.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="sm:col-span-2 space-y-1">
+            <Label className="text-xs">Name</Label>
+            <Input value={draft.original_name} onChange={(e) => set("original_name", e.target.value)} />
+          </div>
+          <div className="sm:col-span-2 space-y-1">
+            <Label className="text-xs">Short description ({draft.short_description.length}/300)</Label>
+            <Textarea
+              rows={3}
+              maxLength={300}
+              value={draft.short_description}
+              onChange={(e) => set("short_description", e.target.value)}
+            />
+          </div>
+          <div className="sm:col-span-2 flex items-center gap-3">
+            {preview && !removeImage ? (
+              <img src={preview} alt="" className="h-20 w-20 rounded object-cover border" />
+            ) : (
+              <div className="h-20 w-20 rounded border bg-secondary/50 text-xs flex items-center justify-center text-foreground/50">
+                No photo
+              </div>
+            )}
+            <div className="space-y-1">
+              <Input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                onChange={(e) => {
+                  setFile(e.target.files?.[0] ?? null);
+                  setRemoveImage(false);
+                }}
+              />
+              {(item.image_path || file) && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setFile(null);
+                    setRemoveImage(true);
+                  }}
+                >
+                  Remove photo
+                </Button>
+              )}
+            </div>
+          </div>
+          {locked && (
+            <p className="sm:col-span-2 text-xs text-amber-700">
+              {referenced == null
+                ? "Checking whether this item is in use..."
+                : "This item is on orders, PACE plans or pick lists, so subject, type and PACE numbers are locked."}
+            </p>
+          )}
+          <div className="space-y-1">
+            <Label className="text-xs">Subject</Label>
+            <Select value={draft.subject_id || "none"} onValueChange={(v) => set("subject_id", v === "none" ? "" : v)} disabled={locked}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">No subject</SelectItem>
+                {subjects.map((sub) => (
+                  <SelectItem key={sub.id} value={sub.id}>
+                    {subjectDisplayName(sub.name)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Type</Label>
+            <Select value={draft.item_type} onValueChange={(v) => set("item_type", v as ItemType)} disabled={locked}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {ITEM_TYPES.map((t) => (
+                  <SelectItem key={t.value} value={t.value}>
+                    {t.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">PACE #</Label>
+            <Input type="number" value={draft.pace_number} disabled={locked} onChange={(e) => set("pace_number", e.target.value)} />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+              <Label className="text-xs">Range start</Label>
+              <Input type="number" value={draft.range_start} disabled={locked} onChange={(e) => set("range_start", e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Range end</Label>
+              <Input type="number" value={draft.range_end} disabled={locked} onChange={(e) => set("range_end", e.target.value)} />
+            </div>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Grade level</Label>
+            <Input type="number" value={draft.grade_level} onChange={(e) => set("grade_level", e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Publisher</Label>
+            <Input value={draft.publisher} onChange={(e) => set("publisher", e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">SKU</Label>
+            <Input value={draft.sku} onChange={(e) => set("sku", e.target.value)} />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+              <Label className="text-xs">Sales price</Label>
+              <Input type="number" step="0.01" value={draft.sales_price} onChange={(e) => set("sales_price", e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Our cost</Label>
+              <Input type="number" step="0.01" value={draft.purchase_price} onChange={(e) => set("purchase_price", e.target.value)} />
+            </div>
+          </div>
+          <label className="flex items-center gap-2 text-sm">
+            <Switch checked={draft.is_featured} onCheckedChange={(v) => set("is_featured", v)} />
+            Featured
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <Switch checked={draft.active} onCheckedChange={(v) => set("active", v)} />
+            Active (shown in store)
+          </label>
+        </div>
+        {err && <p className="text-sm text-destructive">{err}</p>}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button onClick={save} disabled={saving}>
+            {saving ? "Saving..." : "Save item"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 const ITEM_TYPES: { value: ItemType; label: string }[] = [
@@ -175,6 +543,7 @@ export default function AdminInventory() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editPrice, setEditPrice] = useState("");
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [detailItem, setDetailItem] = useState<Item | null>(null);
 
   const [stockEditingId, setStockEditingId] = useState<string | null>(null);
   const [stockEditValue, setStockEditValue] = useState("");
@@ -216,7 +585,7 @@ export default function AdminInventory() {
       const { data, error: pageError } = await supabase
         .from("items")
         .select(
-          "id, subject_id, sku, item_type, pace_number, range_start, range_end, grade_level, publisher, original_name, sales_price, purchase_price, active, subjects(name), inventory_levels(quantity_on_hand)",
+          "id, subject_id, sku, item_type, pace_number, range_start, range_end, grade_level, publisher, original_name, sales_price, purchase_price, active, is_featured, short_description, image_path, subjects(name), inventory_levels(quantity_on_hand)",
         )
         .order("name", { foreignTable: "subjects", ascending: true })
         .order("pace_number", { ascending: true, nullsFirst: false })
@@ -1031,9 +1400,16 @@ export default function AdminInventory() {
                       <Button
                         size="sm"
                         variant="outline"
+                        onClick={() => setDetailItem(item)}
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
                         onClick={() => startEdit(item)}
                       >
-                        Edit Price
+                        Price
                       </Button>
                       <Button
                         size="sm"
@@ -1082,6 +1458,19 @@ export default function AdminInventory() {
             Load {Math.min(PAGE_SIZE, filteredItems.length - visibleCount)} more
           </Button>
         </div>
+      )}
+
+      {detailItem && (
+        <ItemEditDialog
+          item={detailItem}
+          subjects={subjects}
+          adminUserId={adminUserId}
+          onClose={() => setDetailItem(null)}
+          onSaved={(updated) => {
+            setItems((prev) => prev.map((i) => (i.id === updated.id ? { ...i, ...updated } : i)));
+            setDetailItem(null);
+          }}
+        />
       )}
 
       <AlertDialog

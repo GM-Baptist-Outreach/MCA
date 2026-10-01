@@ -3,6 +3,7 @@ import { useOutletContext } from "react-router-dom";
 import { supabase } from "@/lib/supabaseClient";
 import { useToast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -34,10 +35,20 @@ interface PaceSlotRow {
 }
 
 type StoredStatus = "ordered" | "in_stock" | "issued";
-type DisplayStatus = "prescribed" | "received" | "issued" | "completed" | "paused";
+type DisplayStatus =
+  | "prescribed"
+  | "shipped"
+  | "received"
+  | "issued"
+  | "completed"
+  | "paused";
+
+// Round 3 P2: parents can only mark PACEs MCA has shipped.
+export const MCA_R3_P2_MARKER = "MCA_R3_P2_RECEIVE_ALL";
 
 const DISPLAY_LABELS: Record<DisplayStatus, string> = {
-  prescribed: "Prescribed",
+  prescribed: "Not shipped yet",
+  shipped: "Shipped",
   received: "Received",
   issued: "Issued",
   completed: "Completed",
@@ -46,6 +57,7 @@ const DISPLAY_LABELS: Record<DisplayStatus, string> = {
 
 const DISPLAY_COLORS: Record<DisplayStatus, string> = {
   prescribed: "bg-secondary text-foreground/70",
+  shipped: "bg-blue-500/10 text-blue-700",
   received: "bg-yellow-500/10 text-yellow-700",
   issued: "bg-purple-500/10 text-purple-700",
   completed: "bg-green-500/10 text-green-700",
@@ -68,14 +80,19 @@ function displayStatus(slot: PaceSlotRow): DisplayStatus {
   if (slot.status === "in_stock") return "received";
   if (slot.status === "issued") return "issued";
   if (slot.status === "paused") return "paused";
+  if (slot.status === "ordered") return "shipped";
   return "prescribed";
 }
 
 function storedSelectValue(slot: PaceSlotRow): string {
   if (slot.status === "in_stock") return "in_stock";
   if (slot.status === "issued") return "issued";
-  if (slot.status === "ordered" || slot.status === "prescribed") return "ordered";
+  if (slot.status === "ordered") return "ordered";
   return "";
+}
+
+function showTableFlag(group: string, electiveSubjectId: string): boolean {
+  return group !== "" && (group !== "Electives" || electiveSubjectId !== "");
 }
 
 export default function PortalPaceStatus() {
@@ -88,6 +105,7 @@ export default function PortalPaceStatus() {
   const [schoolYear, setSchoolYear] = useState(currentSchoolYear());
   const [loading, setLoading] = useState(false);
   const [savingSlotId, setSavingSlotId] = useState<string | null>(null);
+  const [receivingAll, setReceivingAll] = useState(false);
 
   useEffect(() => {
     if (!selectedStudent) {
@@ -211,6 +229,56 @@ export default function PortalPaceStatus() {
     setSavingSlotId(null);
   };
 
+  const receiveAll = async (targets: PaceSlotRow[], scopeLabel: string) => {
+    if (!selectedStudent) return;
+    const shipped = targets.filter(
+      (slot) => slot.status === "ordered" && slot.item_id != null && slot.score == null,
+    );
+    if (shipped.length === 0) {
+      toast({ title: "Nothing to receive", description: "No shipped PACEs are waiting." });
+      return;
+    }
+    const ok = window.confirm(
+      `Mark ${shipped.length} shipped PACE${shipped.length === 1 ? "" : "s"} (${scopeLabel}) as Received?`,
+    );
+    if (!ok) return;
+    setReceivingAll(true);
+    const today = new Date().toISOString().slice(0, 10);
+    const now = new Date().toISOString();
+    const itemIds = [...new Set(shipped.map((slot) => slot.item_id as string))];
+    const { error } = await supabase.from("pace_status").upsert(
+      itemIds.map((itemId) => ({
+        student_id: selectedStudent.id,
+        item_id: itemId,
+        status: "in_stock",
+        status_date: today,
+        updated_at: now,
+      })),
+      { onConflict: "student_id,item_id" },
+    );
+    setReceivingAll(false);
+    if (error) {
+      toast({
+        title: "Couldn't mark received",
+        description: error.message,
+        variant: "destructive",
+      });
+      return;
+    }
+    const received = new Set(itemIds);
+    setSlots((prev) =>
+      prev.map((row) =>
+        row.status === "ordered" && row.item_id && received.has(row.item_id)
+          ? { ...row, status: "in_stock" }
+          : row,
+      ),
+    );
+    toast({ title: `Marked ${itemIds.length} received` });
+  };
+
+  const shippedInView = rows.filter((slot) => slot.status === "ordered").length;
+  const shippedAll = slots.filter((slot) => slot.status === "ordered").length;
+
   if (!selectedStudent) {
     return (
       <p className="text-foreground/60">
@@ -229,9 +297,9 @@ export default function PortalPaceStatus() {
         </h2>
         <p className="text-sm text-foreground/60">
           {selectedStudent.student_name}. This table is the PACEs prescribed
-          for {schoolYear}. Prescribed covers a prescribed or ordered PACE.
-          Received means it is in stock. Issued means it was issued. Completed
-          means it passed, failed, or already has a score.
+          for {schoolYear}. Not shipped yet means MCA has not sent it. Shipped
+          means MCA sent it. Mark it Received when it arrives, and Issued when
+          your student starts it. Completed means it has a score.
         </p>
       </div>
 
@@ -273,6 +341,27 @@ export default function PortalPaceStatus() {
               )}
             </SelectContent>
           </Select>
+        )}
+        {shippedAll > 0 && (
+          <div className="flex gap-2 flex-wrap" data-marker="MCA_R3_P2_RECEIVE_ALL">
+            {showTableFlag(group, electiveSubjectId) && shippedInView > 0 && (
+              <Button
+                size="sm"
+                disabled={receivingAll}
+                onClick={() => receiveAll(rows, "this subject")}
+              >
+                Receive All ({shippedInView})
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={receivingAll}
+              onClick={() => receiveAll(slots, "all subjects")}
+            >
+              Receive All Shipped, all subjects ({shippedAll})
+            </Button>
+          </div>
         )}
         <div className="space-y-1">
           <p className="text-xs text-foreground/50">School year</p>
@@ -318,7 +407,8 @@ export default function PortalPaceStatus() {
               {rows.map((slot) => {
                 const label = displayStatus(slot);
                 const canWrite =
-                  label !== "completed" && slot.item_id != null;
+                  slot.item_id != null &&
+                  (label === "shipped" || label === "received" || label === "issued");
                 return (
                   <tr key={slot.id} className="border-t border-border/50">
                     <td className="p-3">{subjectDisplayName(slot.subjectName)}</td>
@@ -334,6 +424,9 @@ export default function PortalPaceStatus() {
                       </span>
                     </td>
                     <td className="p-3">
+                      {!canWrite && label === "prescribed" && (
+                        <span className="text-xs text-foreground/50">Waiting on MCA</span>
+                      )}
                       {canWrite && (
                         <Select
                           value={storedSelectValue(slot) || undefined}
@@ -346,7 +439,9 @@ export default function PortalPaceStatus() {
                             <SelectValue placeholder="Set status" />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="ordered">Prescribed</SelectItem>
+                            {label !== "issued" && (
+                              <SelectItem value="ordered">Shipped</SelectItem>
+                            )}
                             <SelectItem value="in_stock">Received</SelectItem>
                             <SelectItem value="issued">Issued</SelectItem>
                           </SelectContent>

@@ -34,7 +34,9 @@ const corsHeaders = {
 
 const QUARTER_SHIP_COUNT = 3;
 const SCORE_LOOKBACK = 6;
-const UNISSUED = new Set(["prescribed", "ordered", "in_stock"]);
+// MCA_R3_F1_NO_RESHIP: only never-shipped slots are picked. Slots already on
+// THIS pick list (ordered / in_stock) are kept so a forced rebuild is stable.
+const ALREADY_ON_LIST = new Set(["ordered", "in_stock"]);
 const ISSUED = new Set(["issued", "passed", "failed"]);
 
 interface CatalogItem {
@@ -146,7 +148,11 @@ function isoToday(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-function nextQuarter(slots: SlotRow[]): SlotRow[] {
+function nextQuarter(
+  slots: SlotRow[],
+  onThisList: Set<string> = new Set(),
+  annual = false,
+): SlotRow[] {
   const bySubject = new Map<string, SlotRow[]>();
   for (const slot of slots) {
     const list = bySubject.get(slot.subject_id) ?? [];
@@ -160,9 +166,14 @@ function nextQuarter(slots: SlotRow[]): SlotRow[] {
   const picked: SlotRow[] = [];
   for (const list of groups) {
     const unissued = list
-      .filter((slot) => UNISSUED.has(slot.status))
+      .filter(
+        (slot) =>
+          slot.status === "prescribed" ||
+          (ALREADY_ON_LIST.has(slot.status) && onThisList.has(slot.id)),
+      )
       .sort((a, b) => a.slot_index - b.slot_index);
-    picked.push(...unissued.slice(0, QUARTER_SHIP_COUNT));
+    // MCA_R3_A5_ANNUAL_SHIP: annual mode ships every unshipped PACE at once.
+    picked.push(...(annual ? unissued : unissued.slice(0, QUARTER_SHIP_COUNT)));
   }
   return picked;
 }
@@ -372,6 +383,7 @@ Deno.serve(async (req: Request) => {
 
       const outcome = await buildForSchedule(admin, schedule, shipDate, today, {
         reminderEmailSentAt: existing?.reminder_email_sent_at ?? null,
+        existingPickListId: existing?.id ?? null,
       });
       results.push(outcome);
     }
@@ -398,7 +410,7 @@ async function buildForSchedule(
   },
   shipDate: string,
   today: string,
-  options: { reminderEmailSentAt: string | null },
+  options: { reminderEmailSentAt: string | null; existingPickListId?: string | null },
 ) {
   const { data: student } = await admin
     .from("students")
@@ -416,8 +428,20 @@ async function buildForSchedule(
   if (slotError) throw slotError;
 
   const slots = (slotRows ?? []) as SlotRow[];
-  const missing = missingScores(slots);
-  const quarter = nextQuarter(slots);
+  const annual = schedule.mode === "annual";
+  const onThisList = new Set<string>();
+  if (options.existingPickListId) {
+    const { data: existingLines } = await admin
+      .from("pick_list_items")
+      .select("pace_slot_id")
+      .eq("pick_list_id", options.existingPickListId);
+    for (const line of existingLines ?? []) {
+      if (line.pace_slot_id) onThisList.add(line.pace_slot_id as string);
+    }
+  }
+  // Annual Ship has no later shipment to hold back, so the score gate is skipped.
+  const missing = annual ? [] : missingScores(slots);
+  const quarter = nextQuarter(slots, onThisList, annual);
 
   const familyRel = student?.families as
     | { email: string; parent_name: string }
@@ -492,7 +516,7 @@ async function buildForSchedule(
   }
 
   if (quarter.length === 0) {
-    return { student_id: schedule.student_id, skipped: "no unissued PACEs" };
+    return { student_id: schedule.student_id, skipped: "no unshipped PACEs" };
   }
 
   const { data: catalogRows, error: catalogError } = await admin
@@ -553,7 +577,9 @@ async function buildForSchedule(
         ship_date: shipDate,
         status: "ready",
         paused_for_missing_scores: false,
-        notes: `Next ${QUARTER_SHIP_COUNT} unissued PACEs per logged subject.`,
+        notes: annual
+          ? "Annual Ship: every unshipped prescribed PACE."
+          : `Next ${QUARTER_SHIP_COUNT} unshipped PACEs per logged subject.`,
         updated_at: new Date().toISOString(),
       },
       { onConflict: "student_id,school_year,ship_date" },
@@ -601,7 +627,11 @@ async function buildForSchedule(
     schedule.q3_ship_date,
     schedule.q4_ship_date,
   ].filter((d): d is string => !!d && d > shipDate).sort();
-  const next = schedule.mode === "every_8_weeks" ? addDays(shipDate, 56) : (fixed[0] ?? null);
+  const next = annual
+    ? null
+    : schedule.mode === "every_8_weeks"
+      ? addDays(shipDate, 56)
+      : (fixed[0] ?? null);
 
   await admin
     .from("student_ship_schedules")

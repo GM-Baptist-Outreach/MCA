@@ -21,6 +21,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Input } from "@/components/ui/input";
+import { currentSchoolYear, nextSchoolYear } from "@/lib/loggedCourses";
 import type { PortalContext } from "./PortalLayout";
 
 const CANCEL_REASON_LABELS: Record<string, string> = {
@@ -112,6 +114,101 @@ function BooksNeededCard({ studentId }: { studentId: string }) {
         <Link to={href}>Buy in the MCA store</Link>
       </Button>
     </div>
+  );
+}
+
+/**
+ * Round 3 P3 (marker MCA_R3_P3_START_DATE_SHIPS): parents pick the first day of
+ * school once per year. MCA builds the shipping schedule from it.
+ */
+function StartSchoolYearCard({ studentId, studentName }: { studentId: string; studentName: string }) {
+  const { toast } = useToast();
+  const [missingYears, setMissingYears] = useState<string[]>([]);
+  const [dates, setDates] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+
+  const load = async () => {
+    const now = new Date();
+    const current = currentSchoolYear(now);
+    const years = [current];
+    // From June 1, also offer next school year.
+    if (now.getMonth() === 5) years.push(nextSchoolYear(current));
+    const { data } = await supabase
+      .from("student_school_calendars")
+      .select("school_year")
+      .eq("student_id", studentId)
+      .in("school_year", years);
+    const have = new Set((data ?? []).map((row) => row.school_year as string));
+    setMissingYears(years.filter((year) => !have.has(year)));
+  };
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [studentId]);
+
+  const save = async (year: string) => {
+    const date = dates[year];
+    if (!date) return;
+    const ok = window.confirm(
+      `Start ${studentName}'s ${year} school year on ${date}? This can't be changed online. Contact MCA if you need to change it later.`,
+    );
+    if (!ok) return;
+    setSaving(true);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const { error } = await supabase.from("student_school_calendars").insert({
+      student_id: studentId,
+      school_year: year,
+      start_date: date,
+      set_by: user?.id ?? null,
+    });
+    setSaving(false);
+    if (error) {
+      toast({ title: "Couldn't save the start date", description: error.message, variant: "destructive" });
+      return;
+    }
+    toast({ title: "School start date saved", description: "MCA will plan your PACE shipments from this date." });
+    load();
+  };
+
+  if (missingYears.length === 0) return null;
+  return (
+    <>
+      {missingYears.map((year) => {
+        const first = year.slice(0, 4);
+        return (
+          <div
+            key={year}
+            className="rounded-xl border border-primary/30 bg-primary/5 p-5 space-y-3"
+            data-marker="MCA_R3_P3_START_DATE_SHIPS"
+          >
+            <h3 className="font-semibold text-foreground">Start your {year} school year</h3>
+            <p className="text-sm text-foreground/70">
+              Pick {studentName}'s first day of school. MCA ships PACEs about two weeks before each
+              quarter, starting from this date. You can set it once.
+            </p>
+            <div className="flex items-end gap-2 flex-wrap">
+              <div className="space-y-1">
+                <Label className="text-xs">First day of school</Label>
+                <Input
+                  type="date"
+                  className="bg-background h-9 w-44"
+                  min={`${first}-07-01`}
+                  max={`${first}-12-31`}
+                  value={dates[year] ?? ""}
+                  onChange={(e) => setDates((prev) => ({ ...prev, [year]: e.target.value }))}
+                />
+              </div>
+              <Button disabled={saving || !dates[year]} onClick={() => save(year)}>
+                Save start date
+              </Button>
+            </div>
+          </div>
+        );
+      })}
+    </>
   );
 }
 
@@ -231,6 +328,13 @@ const PortalHome = () => {
         <p className="text-sm text-foreground/60">{family.email}</p>
       </div>
 
+      {selectedStudent && selectedEnrollment?.status === "active" && (
+        <StartSchoolYearCard
+          key={selectedStudent.id}
+          studentId={selectedStudent.id}
+          studentName={selectedStudent.student_name}
+        />
+      )}
       {selectedStudent && <BooksNeededCard studentId={selectedStudent.id} />}
 
       {selectedStudent && (

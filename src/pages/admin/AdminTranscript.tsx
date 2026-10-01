@@ -21,6 +21,22 @@ interface Completion {
   final_average: number | null;
   letter_grade: string | null;
   credit_earned: number;
+  is_transfer: boolean | null;
+  transfer_school: string | null;
+}
+
+// Round 3 A2: transfer credits show as "(T) school" and never count toward the
+// MCA GPA or high school average. Marker: MCA_R3_A2_TRANSFER_CREDITS
+const TRANSFER_NOTE =
+  "(T) = transfer credit from another school. Counted in credits, not in the MCA GPA or average.";
+
+function isTransfer(c: Completion): boolean {
+  return c.is_transfer === true;
+}
+
+function courseLabel(c: Completion): string {
+  const name = subjectDisplayName(c.subject_name);
+  return isTransfer(c) ? `${name} (T) ${c.transfer_school ?? ""}`.trim() : name;
 }
 
 // Standard unweighted 4.0 scale, matched to MCA's own transcript form.
@@ -69,10 +85,10 @@ export default function AdminTranscript() {
         supabase
           .from("course_completions")
           .select(
-            "id, subject_name, school_year, final_average, letter_grade, credit_earned",
+            "id, subject_name, school_year, final_average, letter_grade, credit_earned, is_transfer, transfer_school",
           )
           .eq("student_id", studentId)
-          .not("final_average", "is", null)
+          .or("final_average.not.is.null,is_transfer.eq.true")
           .order("school_year"),
       ]);
 
@@ -94,19 +110,25 @@ export default function AdminTranscript() {
     return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
   }, [completions]);
 
+  // MCA-graded courses only (transfer rows excluded from GPA and average).
+  const mcaGraded = useMemo(
+    () => completions.filter((c) => !isTransfer(c) && c.final_average != null),
+    [completions],
+  );
+
   const overallGpa = useMemo(() => {
-    if (completions.length === 0) return null;
-    const totalPoints = completions.reduce(
+    if (mcaGraded.length === 0) return null;
+    const totalPoints = mcaGraded.reduce(
       (sum, c) =>
         sum + gradeFromAverage(c.final_average!).points * c.credit_earned,
       0,
     );
-    const totalCredits = completions.reduce(
+    const gpaCredits = mcaGraded.reduce(
       (sum, c) => sum + c.credit_earned,
       0,
     );
-    return totalCredits > 0 ? totalPoints / totalCredits : null;
-  }, [completions]);
+    return gpaCredits > 0 ? totalPoints / gpaCredits : null;
+  }, [mcaGraded]);
 
   const totalCredits = useMemo(
     () => completions.reduce((sum, c) => sum + c.credit_earned, 0),
@@ -114,18 +136,22 @@ export default function AdminTranscript() {
   );
 
   const overallAverage = useMemo(() => {
-    if (completions.length === 0) return null;
+    if (mcaGraded.length === 0) return null;
     return (
-      completions.reduce((sum, c) => sum + c.final_average!, 0) /
-      completions.length
+      mcaGraded.reduce((sum, c) => sum + c.final_average!, 0) /
+      mcaGraded.length
     );
-  }, [completions]);
+  }, [mcaGraded]);
+
+  const hasTransfers = completions.some(isTransfer);
 
   const yearStats = (yearCompletions: Completion[]) => {
+    const graded = yearCompletions.filter(
+      (c) => !isTransfer(c) && c.final_average != null,
+    );
     const avg =
-      yearCompletions.length > 0
-        ? yearCompletions.reduce((sum, c) => sum + c.final_average!, 0) /
-          yearCompletions.length
+      graded.length > 0
+        ? graded.reduce((sum, c) => sum + c.final_average!, 0) / graded.length
         : null;
     const credits = yearCompletions.reduce(
       (sum, c) => sum + c.credit_earned,
@@ -146,7 +172,7 @@ export default function AdminTranscript() {
           .map(
             (c) => `
             <tr>
-              <td>${escapeHtml(subjectDisplayName(c.subject_name))}</td>
+              <td>${escapeHtml(courseLabel(c))}</td>
               <td>${c.final_average ?? "—"}</td>
               <td>${c.letter_grade ?? "—"}</td>
               <td>${c.credit_earned.toFixed(2)}</td>
@@ -203,6 +229,7 @@ export default function AdminTranscript() {
             <div><strong>Total Credits:</strong> ${totalCredits.toFixed(2)}</div>
           </div>
           ${yearsHtml}
+          ${hasTransfers ? `<div class="legend">${TRANSFER_NOTE}</div>` : ""}
           <div class="signature">Administrator's Signature</div>
           <div class="legend">
             Grading Scale: 98-100=A+ 96-97=A 94-95=A- 92-93=B+ 90-91=B 88-89=B- 86-87=C+ 83-85=C 80-82=C- 76-79=D+ 74-75=D 0-73=F
@@ -269,7 +296,7 @@ export default function AdminTranscript() {
         These three fields aren't stored yet — fill them in before printing each
         time. Only completed courses (a final average logged) count toward this
         transcript; courses marked "in progress" show on the Graduation
-        Projection page instead.
+        Projection page instead. {TRANSFER_NOTE}
       </p>
 
       <div className="rounded-xl border border-border/50 bg-background p-5 grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
@@ -317,7 +344,7 @@ export default function AdminTranscript() {
                   <tbody>
                     {yearCompletions.map((c) => (
                       <tr key={c.id} className="border-t border-border/50">
-                        <td className="p-2">{subjectDisplayName(c.subject_name)}</td>
+                        <td className="p-2">{courseLabel(c)}</td>
                         <td className="p-2">{c.final_average ?? "—"}</td>
                         <td className="p-2">{c.letter_grade ?? "—"}</td>
                         <td className="p-2">{c.credit_earned.toFixed(2)}</td>
