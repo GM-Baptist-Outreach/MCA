@@ -302,7 +302,7 @@ const AdminOrders = () => {
       <!DOCTYPE html>
       <html>
         <head>
-          <title>Order Pick List — ${escapeHtml(order.customer_name || "Order")}</title>
+          <title>Order Summary — ${escapeHtml(order.customer_name || "Order")}</title>
           <style>
             * { box-sizing: border-box; }
             body {
@@ -342,7 +342,7 @@ const AdminOrders = () => {
           </style>
         </head>
         <body>
-          <h1>Midwest Christian Academy — Order Pick List</h1>
+          <h1>Midwest Christian Academy — Order Summary</h1>
           <div class="subtitle">Order placed ${escapeHtml(new Date(order.created_at).toLocaleString())}</div>
 
           <div class="section">
@@ -651,7 +651,7 @@ const AdminOrders = () => {
 
               <div className="bg-background rounded-lg border border-border/50 p-4 mb-3">
                 <p className="text-xs uppercase tracking-wide text-foreground/50 mb-2">
-                  Pick List
+                  Items
                 </p>
                 <ul className="space-y-1">
                   {order.order_items.map((oi, i) => (

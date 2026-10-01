@@ -257,6 +257,10 @@ function ItemEditDialog({
       setSaving(false);
       return;
     }
+    // Clean up the old photo file when it was replaced or removed.
+    if (imagePath !== undefined && item.image_path && item.image_path !== imagePath) {
+      await supabase.storage.from(STORE_IMAGE_BUCKET).remove([item.image_path]);
+    }
     if (adminUserId && price !== item.sales_price) {
       await supabase.from("price_change_log").insert({
         item_id: item.id,
