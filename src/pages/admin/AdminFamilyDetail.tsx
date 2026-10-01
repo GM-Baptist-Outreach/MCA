@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 import { supabase } from "@/lib/supabaseClient";
 import { cn } from "@/lib/utils";
@@ -1357,6 +1358,118 @@ function reviewName(
   return row?.[key] ?? "";
 }
 
+const isHeicUrl = (url: string) => /\.(heic|heif)(\?|$)/i.test(url);
+
+/** Full-screen viewer for test-upload photos with prev/next arrows, arrow keys, and a counter. Wraps at the ends. */
+export function TestPhotoViewer({
+  urls,
+  index,
+  onIndexChange,
+  onClose,
+}: {
+  urls: string[];
+  index: number;
+  onIndexChange: (index: number) => void;
+  onClose: () => void;
+}) {
+  const count = urls.length;
+  const current = count ? ((index % count) + count) % count : 0;
+  const url = urls[current];
+  const multiple = count > 1;
+  const go = (delta: number) => {
+    if (!multiple) return;
+    onIndexChange((current + delta + count) % count);
+  };
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        go(1);
+      } else if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        go(-1);
+      } else if (event.key === "Escape") {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  if (!url) return null;
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Test photo viewer"
+      data-testid="test-photo-viewer"
+      className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6"
+      onClick={onClose}
+    >
+      <button
+        type="button"
+        aria-label="Close photo"
+        className="absolute top-4 right-4 rounded-full bg-white/90 p-2 text-black hover:bg-white"
+        onClick={(event) => {
+          event.stopPropagation();
+          onClose();
+        }}
+      >
+        <X className="h-5 w-5" />
+      </button>
+      {multiple && (
+        <button
+          type="button"
+          aria-label="Previous photo"
+          className="absolute left-4 top-1/2 -translate-y-1/2 rounded-full bg-white/90 p-3 text-black hover:bg-white"
+          onClick={(event) => {
+            event.stopPropagation();
+            go(-1);
+          }}
+        >
+          <ChevronLeft className="h-6 w-6" />
+        </button>
+      )}
+      <div className="flex max-h-full max-w-full items-center justify-center" onClick={(event) => event.stopPropagation()}>
+        {isHeicUrl(url) ? (
+          // Chrome can't show iPhone HEIC photos inline; open or download instead.
+          <a
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded bg-white px-6 py-4 text-lg underline text-black"
+          >
+            HEIC photo (open)
+          </a>
+        ) : (
+          <img src={url} alt={`Test page ${current + 1} of ${count}`} className="max-h-[85vh] max-w-[85vw]" />
+        )}
+      </div>
+      {multiple && (
+        <button
+          type="button"
+          aria-label="Next photo"
+          className="absolute right-4 top-1/2 -translate-y-1/2 rounded-full bg-white/90 p-3 text-black hover:bg-white"
+          onClick={(event) => {
+            event.stopPropagation();
+            go(1);
+          }}
+        >
+          <ChevronRight className="h-6 w-6" />
+        </button>
+      )}
+      <div
+        data-testid="test-photo-counter"
+        className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-white/90 px-3 py-1 text-sm text-black"
+        onClick={(event) => event.stopPropagation()}
+      >
+        {current + 1} of {count}
+      </div>
+    </div>
+  );
+}
+
 export function AdminTestReviews({
   familyId,
   embedded = false,
@@ -1373,7 +1486,7 @@ export function AdminTestReviews({
   const [draftScore, setDraftScore] = useState<Record<string, string>>({});
   const [draftPace, setDraftPace] = useState<Record<string, string>>({});
   const [photos, setPhotos] = useState<Record<string, string[]>>({});
-  const [lightbox, setLightbox] = useState<string | null>(null);
+  const [lightbox, setLightbox] = useState<{ urls: string[]; index: number } | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -1580,7 +1693,7 @@ export function AdminTestReviews({
                         Photos
                       </Button>
                       <div className="flex gap-1 mt-1">
-                        {(photos[row.id] ?? []).map((url) =>
+                        {(photos[row.id] ?? []).map((url, index) =>
                           /\.(heic|heif)(\?|$)/i.test(url) ? (
                             // Chrome can't show iPhone HEIC photos inline; open or download instead.
                             <a
@@ -1593,7 +1706,12 @@ export function AdminTestReviews({
                               HEIC photo (open)
                             </a>
                           ) : (
-                            <button key={url} type="button" onClick={() => setLightbox(url)}>
+                            <button
+                              key={url}
+                              type="button"
+                              aria-label={`Open photo ${index + 1}`}
+                              onClick={() => setLightbox({ urls: photos[row.id] ?? [], index })}
+                            >
                               <img src={url} alt="" className="h-12 w-12 object-cover rounded border" />
                             </button>
                           ),
@@ -1643,13 +1761,12 @@ export function AdminTestReviews({
         </div>
       )}
       {lightbox && (
-        <button
-          type="button"
-          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6"
-          onClick={() => setLightbox(null)}
-        >
-          <img src={lightbox} alt="Test page" className="max-h-full max-w-full" />
-        </button>
+        <TestPhotoViewer
+          urls={lightbox.urls}
+          index={lightbox.index}
+          onIndexChange={(index) => setLightbox((prev) => (prev ? { ...prev, index } : prev))}
+          onClose={() => setLightbox(null)}
+        />
       )}
     </div>
   );
