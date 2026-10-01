@@ -466,7 +466,6 @@ const AdminSettings = () => {
         </AlertDialogContent>
       </AlertDialog>
 
-      <AdminEmailTemplates />
     </div>
   );
 };
