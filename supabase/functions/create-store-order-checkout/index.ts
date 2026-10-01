@@ -109,8 +109,14 @@ Deno.serve(async (req: Request) => {
     let productSubtotalCents = 0;
     for (const cartLine of items) {
       const dbItem = dbItemsById.get(cartLine.itemId);
-      const quantity = Number(cartLine.quantity) || 0;
-      if (!dbItem || !dbItem.active || quantity <= 0) continue;
+      const quantity = Number(cartLine.quantity);
+      if (!dbItem || !dbItem.active || !Number.isInteger(quantity) || quantity <= 0) continue;
+      if (quantity > 999) {
+        return new Response(
+          JSON.stringify({ error: `Please contact us for orders over 999 of one item (${dbItem.original_name}).` }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
 
       const unitCents = Math.round(Number(dbItem.sales_price) * 100);
       totalQuantity += quantity;

@@ -30,6 +30,20 @@ import {
   toInternalPaceNumber,
 } from "@/lib/loggedCourses";
 
+const MAX_TEST_PHOTO_BYTES = 25 * 1024 * 1024;
+
+// Storage keys allow only plain ASCII. Phone and Mac file names often carry
+// accents, "#", or the narrow space macOS puts in screenshot names.
+function safeStorageName(name: string): string {
+  const cleaned = name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^[_.]+|_+$/g, "");
+  return (cleaned || "photo").slice(-120);
+}
+
 interface Subject {
   id: string;
   name: string;
@@ -166,13 +180,29 @@ export default function PortalProgress() {
       return;
     }
 
+    if (files && files.length > 0) {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const isImage =
+          file.type.startsWith("image/") || /\.(heic|heif|jpe?g|png|webp)$/i.test(file.name);
+        if (!isImage) {
+          setFormError(`${file.name} is not a photo. Upload pictures of the test pages.`);
+          return;
+        }
+        if (file.size > MAX_TEST_PHOTO_BYTES) {
+          setFormError(`${file.name} is larger than 25 MB. Take a smaller photo and try again.`);
+          return;
+        }
+      }
+    }
+
     setSubmitting(true);
 
     const uploadedPaths: string[] = [];
     if (files && files.length > 0) {
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        const path = `${family.id}/${selectedStudent.id}/${Date.now()}-${i}-${file.name}`;
+        const path = `${family.id}/${selectedStudent.id}/${Date.now()}-${i}-${safeStorageName(file.name)}`;
         const { error: uploadError } = await supabase.storage
           .from("test-score-photos")
           .upload(path, file);

@@ -57,6 +57,15 @@ Deno.serve(async (req: Request) => {
       });
     }
 
+    // Every student needs a grade; a blank one would silently enroll as
+    // Kindergarten without being charged. "none" is the explicit K choice.
+    if (students.some((s: any) => !s || typeof s.lastGradeCompleted !== "string" || !s.lastGradeCompleted.trim())) {
+      return new Response(JSON.stringify({ error: "Please choose the last grade completed for every student." }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     const tuitionStudents = students
       .map((s: any) => ({ ...s, tier: tierFor(s.lastGradeCompleted) }))
       .filter((s: any) => s.tier);

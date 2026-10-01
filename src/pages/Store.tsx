@@ -48,6 +48,7 @@ const SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InByb2l5aW9xZmJqY21wcnNucWhmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYxMDY1MjMsImV4cCI6MjEwMTY4MjUyM30.yufhfBU7Wm9dOHuJz85-zuFd-8plw8YEGeV1NcG6dhA";
 
 const CART_STORAGE_KEY = "mca_store_cart_v1";
+const MAX_LINE_QUANTITY = 999;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 type ItemType = "pace" | "key" | "dvd" | "other";
@@ -105,7 +106,12 @@ function loadCartFromStorage(): CartLine[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed;
+    // Saved carts can be stale or hand-edited; keep whole, positive quantities only.
+    return parsed.flatMap((line) => {
+      const itemId = typeof line?.itemId === "string" ? line.itemId : "";
+      const quantity = Math.min(MAX_LINE_QUANTITY, Math.floor(Number(line?.quantity)));
+      return itemId && Number.isFinite(quantity) && quantity > 0 ? [{ itemId, quantity }] : [];
+    });
   } catch {
     return [];
   }
@@ -310,11 +316,14 @@ export default function Store() {
     if (!companionPrompt) return;
     const chosen = companionPrompt.options.filter((option) => option.checked);
     setCart((prev) => {
-      const next = [...prev];
+      let next = [...prev];
       for (const option of chosen) {
-        const existing = next.find((line) => line.itemId === option.item.id);
-        if (existing) existing.quantity += 1;
-        else next.push({ itemId: option.item.id, quantity: 1 });
+        const id = option.item.id;
+        if (next.some((line) => line.itemId === id)) {
+          next = next.map((line) =>
+            line.itemId === id ? { ...line, quantity: line.quantity + 1 } : line,
+          );
+        } else next.push({ itemId: id, quantity: 1 });
       }
       return next;
     });
@@ -369,11 +378,13 @@ export default function Store() {
       return;
     }
     setCart((prev) => {
-      const next = [...prev];
+      let next = [...prev];
       for (const item of paceItems) {
-        const existing = next.find((line) => line.itemId === item.id);
-        if (existing) existing.quantity += 1;
-        else next.push({ itemId: item.id, quantity: 1 });
+        if (next.some((line) => line.itemId === item.id)) {
+          next = next.map((line) =>
+            line.itemId === item.id ? { ...line, quantity: line.quantity + 1 } : line,
+          );
+        } else next.push({ itemId: item.id, quantity: 1 });
       }
       return next;
     });
@@ -412,8 +423,9 @@ export default function Store() {
       setCart((prev) => prev.filter((l) => l.itemId !== itemId));
       return;
     }
+    const capped = Math.min(MAX_LINE_QUANTITY, Math.floor(quantity));
     setCart((prev) =>
-      prev.map((l) => (l.itemId === itemId ? { ...l, quantity } : l)),
+      prev.map((l) => (l.itemId === itemId ? { ...l, quantity: capped } : l)),
     );
   };
 
