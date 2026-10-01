@@ -64,8 +64,20 @@ interface StoreItem {
   sales_price: number;
   active: boolean;
   grade_level: number | null;
-  subjects: { name: string } | null;
+  short_description?: string | null;
+  image_path?: string | null;
+  subjects: { name: string; image_path?: string | null } | null;
   quantity_on_hand: number | null;
+}
+
+// Round 3 A3 (marker MCA_R3_A3_ITEM_EDIT): store card photo + short description.
+// Display only. Images are never sent to checkout.
+const STORE_IMAGE_BUCKET = "store-item-images";
+function storeCardImage(item: StoreItem): string | null {
+  const path = item.image_path || item.subjects?.image_path || null;
+  if (!path) return null;
+  if (/^https?:\/\//.test(path)) return path;
+  return supabase.storage.from(STORE_IMAGE_BUCKET).getPublicUrl(path).data.publicUrl;
 }
 
 interface Subject {
@@ -165,7 +177,7 @@ export default function Store() {
         const { data, error: pageError } = await supabase
           .from("items")
           .select(
-            "id, subject_id, sku, item_type, pace_number, range_start, range_end, grade_level, original_name, sales_price, active, subjects(name), inventory_levels(quantity_on_hand)",
+            "id, subject_id, sku, item_type, pace_number, range_start, range_end, grade_level, original_name, sales_price, active, short_description, image_path, subjects(name, image_path), inventory_levels(quantity_on_hand)",
           )
           .eq("active", true)
           .order("name", { foreignTable: "subjects", ascending: true })
@@ -749,12 +761,22 @@ export default function Store() {
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {visibleItems.map((item) => {
                   const inCart = cart.find((l) => l.itemId === item.id);
+                  const cardImage = storeCardImage(item);
                   return (
                     <div
                       key={item.id}
                       className="bg-secondary border border-border/50 rounded-xl p-4 flex flex-col justify-between"
                     >
                       <div>
+                        {cardImage && (
+                          <img
+                            src={cardImage}
+                            alt=""
+                            loading="lazy"
+                            className="mb-3 h-36 w-full rounded-lg object-contain bg-background"
+                            data-marker="MCA_R3_A3_ITEM_EDIT"
+                          />
+                        )}
                         <p className="text-xs uppercase tracking-wide text-foreground/50 mb-1">
                           {subjectDisplayName(item.subjects?.name ?? "Uncategorized")} ·{" "}
                           {item.item_type}
@@ -762,6 +784,11 @@ export default function Store() {
                         <h3 className="font-semibold text-foreground mb-2">
                           {item.original_name}
                         </h3>
+                        {item.short_description && (
+                          <p className="text-sm text-foreground/70 mb-2">
+                            {item.short_description}
+                          </p>
+                        )}
                         <p className="text-primary font-bold">
                           ${item.sales_price.toFixed(2)}
                         </p>

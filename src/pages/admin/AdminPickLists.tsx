@@ -8,6 +8,167 @@ import { compareSubjectNames, toAcePaceNumber } from "@/lib/loggedCourses";
 
 const SUPABASE_URL = "https://proiyioqfbjcmprsnqhf.supabase.co";
 
+// ---------------------------------------------------------------------------
+// Round 3 A4 (marker MCA_R3_A4_PACKING_LIST): shared packing slip. No prices.
+// ---------------------------------------------------------------------------
+export const MCA_R3_A4_MARKER = "MCA_R3_A4_PACKING_LIST";
+const PACKING_LOGO_URL =
+  "https://vibe.filesafe.space/1784303289974857996/attachments/5ce70202-91c1-463f-929b-e89f47f07a50.png";
+
+export interface PackingSlipLine {
+  name: string;
+  quantity: number;
+  note?: string;
+}
+
+export interface PackingSlip {
+  reference: string;
+  date: string;
+  shipTo: {
+    name: string;
+    addressLines: string[];
+    phone?: string | null;
+    email?: string | null;
+  };
+  studentName?: string | null;
+  lines: PackingSlipLine[];
+  footerNote?: string | null;
+}
+
+function escapeSlip(value: string | number | null | undefined): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/** Full HTML document, one slip per printed page. */
+export function renderPackingSlipHtml(slips: PackingSlip[]): string {
+  const pages = slips
+    .map((slip) => {
+      const rows = slip.lines
+        .map(
+          (line) => `
+          <tr>
+            <td class="box"><span class="check"></span></td>
+            <td>${escapeSlip(line.name)}</td>
+            <td class="qty">${escapeSlip(line.quantity)}</td>
+            <td>${escapeSlip(line.note ?? "")}</td>
+          </tr>`,
+        )
+        .join("");
+      const address = slip.shipTo.addressLines
+        .filter(Boolean)
+        .map((l) => `<div>${escapeSlip(l)}</div>`)
+        .join("");
+      return `
+      <section class="slip">
+        <header>
+          <div class="brand">
+            <img src="${PACKING_LOGO_URL}" alt="" />
+            <div>
+              <div class="school">Midwest Christian Academy</div>
+              <div class="contact">(844) 663-4477 &middot; david@midwestchristianacademy.com</div>
+            </div>
+          </div>
+          <div class="title">
+            <div class="label">PACKING LIST</div>
+            <div>${escapeSlip(slip.reference)}</div>
+            <div>${escapeSlip(slip.date)}</div>
+          </div>
+        </header>
+        <div class="shipto">
+          <div class="heading">Ship to</div>
+          <div class="name">${escapeSlip(slip.shipTo.name)}</div>
+          ${address}
+          ${slip.shipTo.phone ? `<div>${escapeSlip(slip.shipTo.phone)}</div>` : ""}
+          ${slip.shipTo.email ? `<div>${escapeSlip(slip.shipTo.email)}</div>` : ""}
+          ${slip.studentName ? `<div class="student">Student: ${escapeSlip(slip.studentName)}</div>` : ""}
+        </div>
+        <table>
+          <thead><tr><th class="box"></th><th>Item</th><th class="qty">Qty</th><th>Note</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="4">No items.</td></tr>'}</tbody>
+        </table>
+        ${slip.footerNote ? `<p class="footnote">${escapeSlip(slip.footerNote)}</p>` : ""}
+        <div class="packed">Packed by: ______________________ &nbsp; Date: ____________</div>
+        <p class="thanks">Thank you for learning with Midwest Christian Academy.</p>
+      </section>`;
+    })
+    .join("");
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Packing list</title>
+<!-- ${MCA_R3_A4_MARKER} -->
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; color: #111; margin: 0; }
+  .slip { padding: 32px 40px; page-break-after: always; }
+  .slip:last-child { page-break-after: auto; }
+  header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #111; padding-bottom: 12px; }
+  .brand { display: flex; gap: 12px; align-items: center; }
+  .brand img { height: 56px; }
+  .school { font-size: 20px; font-weight: bold; }
+  .contact { font-size: 12px; color: #444; }
+  .title { text-align: right; font-size: 12px; }
+  .title .label { font-size: 22px; font-weight: bold; letter-spacing: 1px; }
+  .shipto { margin: 18px 0; font-size: 14px; line-height: 1.4; }
+  .shipto .heading { font-size: 11px; text-transform: uppercase; color: #666; }
+  .shipto .name { font-weight: bold; }
+  .shipto .student { margin-top: 6px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { border: 1px solid #999; padding: 6px 8px; text-align: left; vertical-align: top; }
+  th { background: #f2f2f2; }
+  td.box, th.box { width: 28px; text-align: center; }
+  td.qty, th.qty { width: 50px; text-align: center; }
+  .check { display: inline-block; width: 14px; height: 14px; border: 1.5px solid #111; }
+  .footnote { font-size: 12px; color: #444; margin-top: 10px; }
+  .packed { margin-top: 28px; font-size: 13px; }
+  .thanks { margin-top: 18px; font-size: 12px; color: #666; text-align: center; }
+</style>
+</head>
+<body>${pages}</body>
+</html>`;
+}
+
+export function printPackingSlips(slips: PackingSlip[]): boolean {
+  const w = window.open("", "_blank", "width=900,height=1000");
+  if (!w) return false;
+  w.document.write(renderPackingSlipHtml(slips));
+  w.document.close();
+  w.focus();
+  window.setTimeout(() => w.print(), 400);
+  return true;
+}
+
+interface PackingFamily {
+  parent_name: string | null;
+  email: string | null;
+  phone: string | null;
+  address: string | null;
+  address_street: string | null;
+  address_city: string | null;
+  address_state: string | null;
+  address_zip: string | null;
+}
+
+function firstRel<T>(rel: T | T[] | null | undefined): T | null {
+  if (!rel) return null;
+  return Array.isArray(rel) ? rel[0] ?? null : rel;
+}
+
+function familyAddressLines(f: PackingFamily | null): string[] {
+  if (!f) return [];
+  if (f.address_street) {
+    const cityLine = [f.address_city, [f.address_state, f.address_zip].filter(Boolean).join(" ")]
+      .filter(Boolean)
+      .join(", ");
+    return [f.address_street, cityLine];
+  }
+  return f.address ? f.address.split(/\n|,\s*(?=[A-Za-z].*\d{5})/).map((l) => l.trim()) : [];
+}
+
 interface PickList {
   id: string;
   school_year: string;
@@ -16,7 +177,10 @@ interface PickList {
   paused_for_missing_scores: boolean;
   notes: string | null;
   reminder_email_sent_at: string | null;
-  students: { student_name: string } | { student_name: string }[] | null;
+  students:
+    | { student_name: string; families?: PackingFamily | PackingFamily[] | null }
+    | { student_name: string; families?: PackingFamily | PackingFamily[] | null }[]
+    | null;
   pick_list_items: Array<{
     id: string;
     pace_number: number;
@@ -52,7 +216,7 @@ export default function AdminPickLists() {
     const { data, error } = await supabase
       .from("pick_lists")
       .select(
-        "id, school_year, ship_date, status, paused_for_missing_scores, notes, reminder_email_sent_at, students(student_name), pick_list_items(id, pace_number, quantity_on_hand, backordered, subjects(name), items(original_name)), resource_book_notices(notified_at, items(original_name))",
+        "id, school_year, ship_date, status, paused_for_missing_scores, notes, reminder_email_sent_at, students(student_name, families(parent_name, email, phone, address, address_street, address_city, address_state, address_zip)), pick_list_items(id, pace_number, quantity_on_hand, backordered, subjects(name), items(original_name)), resource_book_notices(notified_at, items(original_name))",
       )
       .order("ship_date", { ascending: false })
       .limit(100);
@@ -109,6 +273,61 @@ export default function AdminPickLists() {
 
   const readyCount = lists.filter((list) => list.status === "ready").length;
 
+  const slipForList = (list: PickList): PackingSlip => {
+    const student = firstRel(list.students);
+    const family = firstRel(student?.families ?? null);
+    const lines = [...list.pick_list_items]
+      .sort(
+        (a, b) =>
+          compareSubjectNames(relText(a.subjects, "name"), relText(b.subjects, "name")) ||
+          a.pace_number - b.pace_number,
+      )
+      .map((item) => {
+        const subject = relText(item.subjects, "name") || "Subject";
+        const name = relText(item.items, "original_name") || `${subject} PACE`;
+        return {
+          name,
+          quantity: 1,
+          note: [`ACE #${toAcePaceNumber(item.pace_number)}`, item.backordered ? "Backordered - ships later" : ""]
+            .filter(Boolean)
+            .join(" | "),
+        };
+      });
+    return {
+      reference: `Pick list ${list.id.slice(0, 8).toUpperCase()}`,
+      date: list.ship_date,
+      shipTo: {
+        name: family?.parent_name || student?.student_name || "Family",
+        addressLines: familyAddressLines(family),
+        phone: family?.phone,
+        email: family?.email,
+      },
+      studentName: student?.student_name ?? null,
+      lines,
+      footerNote: `School year ${list.school_year}.`,
+    };
+  };
+
+  const printSlips = (target: PickList[]) => {
+    if (target.length === 0) return;
+    if (!printPackingSlips(target.map(slipForList))) {
+      toast({ title: "Pop-up blocked", description: "Allow pop-ups to print packing lists.", variant: "destructive" });
+    }
+  };
+
+  const markShipped = async (list: PickList) => {
+    if (!window.confirm("Mark this pick list as shipped?")) return;
+    const { error } = await supabase
+      .from("pick_lists")
+      .update({ status: "shipped", updated_at: new Date().toISOString() })
+      .eq("id", list.id);
+    if (error) {
+      toast({ title: "Couldn't update", description: error.message, variant: "destructive" });
+      return;
+    }
+    load();
+  };
+
   return (
     <div className="space-y-6 print:space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap print:hidden">
@@ -128,6 +347,15 @@ export default function AdminPickLists() {
           >
             <Printer className="h-4 w-4 mr-1.5" />
             Print all ready
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => printSlips(lists.filter((list) => list.status === "ready"))}
+            disabled={readyCount === 0}
+            data-marker="MCA_R3_A4_PACKING_LIST"
+          >
+            <Printer className="h-4 w-4 mr-1.5" />
+            Packing lists, all ready (one family per page)
           </Button>
           <Button onClick={generateDue} disabled={running}>
             {running ? "Running..." : "Generate due pick lists"}
@@ -155,7 +383,7 @@ export default function AdminPickLists() {
               >
                 <div className="flex justify-between gap-3 flex-wrap">
                   <p className="font-medium">
-                    {relText(list.students, "student_name") || "Student"} · {list.ship_date} · {list.school_year}
+                    {(firstRel(list.students)?.student_name ?? "") || "Student"} · {list.ship_date} · {list.school_year}
                   </p>
                   <div className="flex items-center gap-2">
                     <p className="text-sm capitalize">
@@ -171,6 +399,24 @@ export default function AdminPickLists() {
                       <Printer className="h-4 w-4 mr-1.5" />
                       Print
                     </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="print:hidden"
+                      onClick={() => printSlips([list])}
+                    >
+                      Packing list
+                    </Button>
+                    {list.status === "ready" && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="print:hidden"
+                        onClick={() => markShipped(list)}
+                      >
+                        Mark shipped
+                      </Button>
+                    )}
                   </div>
                 </div>
                 {list.notes && <p className="text-sm text-foreground/70">{list.notes}</p>}

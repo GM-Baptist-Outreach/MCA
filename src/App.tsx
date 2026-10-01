@@ -23,7 +23,9 @@ import AdminFamilies from "./pages/admin/AdminFamilies";
 import AdminCompEnroll from "./pages/admin/AdminCompEnroll";
 import AdminFamilyDetail from "./pages/admin/AdminFamilyDetail";
 import AdminTranscript from "./pages/admin/AdminTranscript";
-import AdminAcademicProjection from "./pages/admin/AdminAcademicProjection";
+import AdminAcademicProjection, {
+  PortalAcademicProjection,
+} from "./pages/admin/AdminAcademicProjection";
 import AdminPickLists, { AdminBackorders } from "./pages/admin/AdminPickLists";
 import { AdminTestReviews } from "./pages/admin/AdminFamilyDetail";
 import Store from "./pages/Store";
@@ -93,6 +95,7 @@ const App = () => (
             <Route index element={<PortalHome />} />
             <Route path="progress" element={<PortalProgress />} />
             <Route path="pace-status" element={<PortalPaceStatus />} />
+            <Route path="projection" element={<PortalAcademicProjection />} />
             <Route path="supervisor-report" element={<PortalSupervisorReport />} />
             <Route path="student-report" element={<PortalStudentReport />} />
             <Route path="star-chart" element={<PortalStarChart />} />

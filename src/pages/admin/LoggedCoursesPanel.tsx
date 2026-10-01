@@ -13,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   addDays,
   average,
@@ -31,7 +32,21 @@ import {
   toAcePaceNumber,
   type CourseCatalogItem,
   type CourseOption,
+  type CoursePaceItem,
 } from "@/lib/loggedCourses";
+
+// Round 3 markers (grep the live bundle for these):
+//   MCA_R3_A1_PRESCRIBE_ALL, MCA_R3_A5_ANNUAL_SHIP, MCA_R3_A6_REMOVE_PACE,
+//   MCA_R3_P3_START_DATE_SHIPS
+export const MCA_R3_PANEL_MARKERS = [
+  "MCA_R3_A1_PRESCRIBE_ALL",
+  "MCA_R3_A5_ANNUAL_SHIP",
+  "MCA_R3_A6_REMOVE_PACE",
+  "MCA_R3_P3_START_DATE_SHIPS",
+] as const;
+
+/** Elementary core subjects for "Prescribe all core subjects". */
+const CORE_ELEMENTARY = ["Math", "English", "Word Building", "Science", "Social Studies"] as const;
 
 const SUPABASE_URL = "https://proiyioqfbjcmprsnqhf.supabase.co";
 const PASSING = 80;
@@ -55,7 +70,7 @@ interface Slot {
 
 interface Schedule {
   id?: string;
-  mode: "fixed_dates" | "every_8_weeks";
+  mode: "fixed_dates" | "every_8_weeks" | "annual";
   q1_ship_date: string;
   q2_ship_date: string;
   q3_ship_date: string;
@@ -64,6 +79,7 @@ interface Schedule {
   next_ship_date: string;
   shipment_paused: boolean;
   pause_reason: string | null;
+  auto_from_calendar?: boolean;
 }
 
 const EMPTY_SCHEDULE = (year: string): Schedule => {
@@ -129,6 +145,14 @@ export default function LoggedCoursesPanel({
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
   const [draftScore, setDraftScore] = useState("");
   const [busy, setBusy] = useState(false);
+  const [enrollmentInfo, setEnrollmentInfo] = useState<{ tier: string | null; frequency: string | null }>({
+    tier: null,
+    frequency: null,
+  });
+  const [showPrescribeAll, setShowPrescribeAll] = useState(false);
+  const [bulkLevel, setBulkLevel] = useState("");
+  const [bulkOverrides, setBulkOverrides] = useState<Record<string, string>>({});
+  const [bulkHs, setBulkHs] = useState<Record<string, boolean>>({});
 
   const load = async () => {
     const catalog: CourseCatalogItem[] = [];
@@ -160,7 +184,7 @@ export default function LoggedCoursesPanel({
     }
     setCourseItems(catalog);
 
-    const [subjectRes, slotRes, scheduleRes, calendarRes] = await Promise.all([
+    const [subjectRes, slotRes, scheduleRes, calendarRes, enrollmentRes] = await Promise.all([
       supabase.from("subjects").select("id, name").eq("active", true),
       supabase
         .from("student_pace_slots")
@@ -173,7 +197,7 @@ export default function LoggedCoursesPanel({
       supabase
         .from("student_ship_schedules")
         .select(
-          "id, mode, q1_ship_date, q2_ship_date, q3_ship_date, q4_ship_date, anchor_ship_date, next_ship_date, shipment_paused, pause_reason",
+          "id, mode, q1_ship_date, q2_ship_date, q3_ship_date, q4_ship_date, anchor_ship_date, next_ship_date, shipment_paused, pause_reason, auto_from_calendar",
         )
         .eq("student_id", studentId)
         .eq("school_year", schoolYear)
@@ -184,7 +208,23 @@ export default function LoggedCoursesPanel({
         .eq("student_id", studentId)
         .eq("school_year", schoolYear)
         .maybeSingle(),
+      supabase
+        .from("enrollments")
+        .select("tuition_tier, frequency, status")
+        .eq("student_id", studentId)
+        .order("created_at", { ascending: false }),
     ]);
+    const enrollments = (enrollmentRes.data ?? []) as Array<{
+      tuition_tier: string | null;
+      frequency: string | null;
+      status: string | null;
+    }>;
+    const activeEnrollment = enrollments.find((e) => e.status === "active") ?? enrollments[0] ?? null;
+    const info = {
+      tier: activeEnrollment?.tuition_tier ?? null,
+      frequency: activeEnrollment?.frequency ?? null,
+    };
+    setEnrollmentInfo(info);
     if (subjectRes.data) {
       setSubjects(
         [...subjectRes.data].sort((a, b) => compareSubjectNames(a.name, b.name)),
@@ -207,7 +247,11 @@ export default function LoggedCoursesPanel({
             : row.next_ship_date ?? "",
         shipment_paused: row.shipment_paused,
         pause_reason: row.pause_reason,
+        auto_from_calendar: row.auto_from_calendar ?? false,
       });
+    } else if (info.frequency === "annual") {
+      // A5: annual payers default to one Annual Ship.
+      setSchedule({ ...EMPTY_SCHEDULE(schoolYear), mode: "annual", next_ship_date: isoToday() });
     } else {
       setSchedule(EMPTY_SCHEDULE(schoolYear));
     }
@@ -252,15 +296,8 @@ export default function LoggedCoursesPanel({
     courseOptions.courses.find((course) => course.key === courseKey) ??
     null;
 
-  const prescribe = async () => {
-    if (!selectedCourse) return;
-    const levelOption =
-      selectedCourse.kind === "level"
-        ? selectedCourse.levels.find((row) => String(row.level) === level)
-        : null;
-    const paces = levelOption ? levelOption.items : selectedCourse.items;
-    if (selectedCourse.kind === "level" && !levelOption) return;
-    setBusy(true);
+  /** Writes PACE boxes for the given catalog PACEs. Returns saved count, or null on error. */
+  const writePaces = async (paces: CoursePaceItem[]): Promise<number | null> => {
     const grouped = new Map<string, typeof paces>();
     for (const pace of paces) {
       const list = grouped.get(pace.subjectId) ?? [];
@@ -295,8 +332,7 @@ export default function LoggedCoursesPanel({
           });
         if (upsertError) {
           toast({ title: "Couldn't prescribe", description: upsertError.message, variant: "destructive" });
-          setBusy(false);
-          return;
+          return null;
         }
         saved += writable.length;
       }
@@ -310,11 +346,127 @@ export default function LoggedCoursesPanel({
         { onConflict: "student_id,subject_id,school_year" },
       );
     }
+    return saved;
+  };
+
+  const prescribe = async () => {
+    if (!selectedCourse) return;
+    const levelOption =
+      selectedCourse.kind === "level"
+        ? selectedCourse.levels.find((row) => String(row.level) === level)
+        : null;
+    const paces = levelOption ? levelOption.items : selectedCourse.items;
+    if (selectedCourse.kind === "level" && !levelOption) return;
+    setBusy(true);
+    const saved = await writePaces(paces);
+    if (saved == null) {
+      setBusy(false);
+      return;
+    }
     toast({
       title: "Course prescribed",
       description: `${saved} PACE boxes saved for ${studentName}.`,
     });
     setBusy(false);
+    load();
+  };
+
+  // ---- A1: prescribe all core subjects ----
+  const coreElementary = useMemo(
+    () =>
+      CORE_ELEMENTARY.map((name) =>
+        courseOptions.elementary.find((course) => course.subjectNames[0] === name),
+      ).filter((course): course is CourseOption => !!course),
+    [courseOptions],
+  );
+  const sharedLevels = useMemo(() => {
+    const set = new Set<number>();
+    for (const course of coreElementary) for (const row of course.levels) set.add(row.level);
+    return [...set].sort((a, b) => a - b);
+  }, [coreElementary]);
+  const isHighSchool = enrollmentInfo.tier === "high_school";
+
+  const prescribeAll = async () => {
+    const paces: CoursePaceItem[] = [];
+    const summary: string[] = [];
+    if (isHighSchool) {
+      for (const course of courseOptions.courses) {
+        if (!bulkHs[course.key]) continue;
+        paces.push(...course.items);
+        summary.push(course.displayName);
+      }
+    } else {
+      for (const course of coreElementary) {
+        const chosen = bulkOverrides[course.key] || bulkLevel;
+        if (!chosen || chosen === "skip") continue;
+        const row = course.levels.find((l) => String(l.level) === chosen);
+        if (!row) continue;
+        paces.push(...row.items);
+        summary.push(`${course.displayName} L${row.level}`);
+      }
+    }
+    if (paces.length === 0) {
+      toast({ title: "Nothing selected", description: "Pick a level or at least one course." });
+      return;
+    }
+    if (!window.confirm(`Prescribe ${summary.join(", ")} for ${studentName} (${schoolYear})?`)) return;
+    setBusy(true);
+    const saved = await writePaces(paces);
+    setBusy(false);
+    if (saved == null) return;
+    toast({ title: "Core subjects prescribed", description: `${saved} PACE boxes saved. ${summary.join(", ")}.` });
+    setShowPrescribeAll(false);
+    load();
+  };
+
+  // ---- A6: remove PACE boxes ----
+  const removeSlots = async (ids: string[], label: string) => {
+    if (ids.length === 0) return;
+    const targets = slots.filter((slot) => ids.includes(slot.id));
+    const sentOrHome = targets.filter((slot) => ["ordered", "in_stock"].includes(slot.status)).length;
+    const warning =
+      sentOrHome > 0
+        ? ` ${sentOrHome} of them already shipped or are at home. Removing them does not recall the books.`
+        : "";
+    if (!window.confirm(`Remove ${label}?${warning}`)) return;
+    setBusy(true);
+    const { data, error } = await supabase.rpc("mca_remove_pace_slots", { p_slot_ids: ids });
+    setBusy(false);
+    if (error) {
+      toast({ title: "Couldn't remove", description: error.message, variant: "destructive" });
+      return;
+    }
+    toast({ title: "Removed", description: `${(data as { removed?: number } | null)?.removed ?? ids.length} PACE box(es) removed.` });
+    setSelectedSlotId(null);
+    load();
+  };
+
+  const removableInSubject = (subjectId: string) =>
+    slots.filter(
+      (slot) =>
+        slot.subject_id === subjectId &&
+        slot.score == null &&
+        ["prescribed", "paused"].includes(slot.status),
+    );
+
+  // ---- P3: rebuild ship schedule from the school start date ----
+  const rebuildFromStartDate = async () => {
+    if (!schoolStartDate) {
+      toast({ title: "Set a school start date first" });
+      return;
+    }
+    if (!window.confirm("Replace the ship dates with dates built from the school start date?")) return;
+    setBusy(true);
+    const { error } = await supabase.rpc("mca_rebuild_ship_schedule_from_calendar", {
+      p_student_id: studentId,
+      p_school_year: schoolYear,
+    });
+    setBusy(false);
+    if (error) {
+      toast({ title: "Couldn't rebuild", description: error.message, variant: "destructive" });
+      return;
+    }
+    toast({ title: "Ship schedule rebuilt from start date" });
     load();
   };
 
@@ -337,7 +489,13 @@ export default function LoggedCoursesPanel({
     if (error) {
       toast({ title: "Couldn't save the start date", description: error.message, variant: "destructive" });
     } else {
-      toast({ title: "School start date saved" });
+      toast({
+        title: "School start date saved",
+        description: schedule.id && !schedule.auto_from_calendar
+          ? "The ship schedule was edited by an admin, so it was left alone. Use Rebuild from start date to replace it."
+          : "Ship dates were built from the start date.",
+      });
+      load();
     }
     setBusy(false);
   };
@@ -348,15 +506,17 @@ export default function LoggedCoursesPanel({
       student_id: studentId,
       school_year: schoolYear,
       mode: schedule.mode,
-      q1_ship_date: schedule.q1_ship_date || null,
-      q2_ship_date: schedule.q2_ship_date || null,
-      q3_ship_date: schedule.q3_ship_date || null,
-      q4_ship_date: schedule.q4_ship_date || null,
+      q1_ship_date: schedule.mode === "annual" ? null : schedule.q1_ship_date || null,
+      q2_ship_date: schedule.mode === "annual" ? null : schedule.q2_ship_date || null,
+      q3_ship_date: schedule.mode === "annual" ? null : schedule.q3_ship_date || null,
+      q4_ship_date: schedule.mode === "annual" ? null : schedule.q4_ship_date || null,
       anchor_ship_date: schedule.anchor_ship_date || null,
       next_ship_date:
         schedule.mode === "every_8_weeks"
           ? schedule.next_ship_date || addDays(isoToday(), 56)
           : schedule.next_ship_date || null,
+      // P3: a manual save means an admin owns these dates now.
+      auto_from_calendar: false,
       updated_at: new Date().toISOString(),
     };
     const { error } = await supabase
@@ -567,7 +727,88 @@ export default function LoggedCoursesPanel({
         >
           Prescribe
         </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => setShowPrescribeAll((v) => !v)}
+          disabled={busy}
+        >
+          {showPrescribeAll ? "Close" : "Prescribe all core subjects"}
+        </Button>
       </div>
+
+      {showPrescribeAll && (
+        <div className="rounded-lg border border-border/60 p-3 space-y-3" data-marker="MCA_R3_A1_PRESCRIBE_ALL">
+          <div className="flex items-center gap-3 flex-wrap text-xs">
+            <span className="text-foreground/60">
+              {isHighSchool ? "High school: check the courses to prescribe." : "Elementary: pick one level for all core subjects, then override any subject."}
+            </span>
+          </div>
+          {isHighSchool ? (
+            <div className="grid sm:grid-cols-2 gap-1 max-h-72 overflow-y-auto">
+              {courseOptions.courses.map((course) => (
+                <label key={course.key} className="flex items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={!!bulkHs[course.key]}
+                    onCheckedChange={(checked) =>
+                      setBulkHs((prev) => ({ ...prev, [course.key]: checked === true }))
+                    }
+                  />
+                  {courseOptionLabel(course)}
+                </label>
+              ))}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Label className="text-xs w-32">Level for all</Label>
+                <Select value={bulkLevel} onValueChange={setBulkLevel}>
+                  <SelectTrigger className="bg-background w-40 h-8">
+                    <SelectValue placeholder="Level" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {sharedLevels.map((lvl) => (
+                      <SelectItem key={lvl} value={String(lvl)}>
+                        Level {lvl}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {coreElementary.map((course) => (
+                <div key={course.key} className="flex items-center gap-2">
+                  <span className="text-sm w-32">{course.displayName}</span>
+                  <Select
+                    value={bulkOverrides[course.key] ?? "same"}
+                    onValueChange={(value) =>
+                      setBulkOverrides((prev) => ({ ...prev, [course.key]: value === "same" ? "" : value }))
+                    }
+                  >
+                    <SelectTrigger className="bg-background w-64 h-8">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="same">Same as above</SelectItem>
+                      <SelectItem value="skip">Skip this subject</SelectItem>
+                      {course.levels.map((row) => (
+                        <SelectItem key={row.level} value={String(row.level)}>
+                          {courseOptionLabel(course, row)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ))}
+            </div>
+          )}
+          <p className="text-xs text-foreground/50">
+            Boxes already ordered, in stock, issued or scored are never overwritten.
+          </p>
+          <Button size="sm" onClick={prescribeAll} disabled={busy}>
+            Prescribe selected
+          </Button>
+        </div>
+      )}
 
       {bySubject.length === 0 ? (
         <p className="text-sm text-foreground/60">No PACEs prescribed for {schoolYear}.</p>
@@ -683,6 +924,33 @@ export default function LoggedCoursesPanel({
               Re-issue
             </Button>
           )}
+          <div className="flex gap-2 w-full flex-wrap" data-marker="MCA_R3_A6_REMOVE_PACE">
+            {selected.score == null && !["issued", "passed", "failed"].includes(selected.status) && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={() =>
+                  removeSlots([selected.id], `PACE ${toAcePaceNumber(selected.pace_number)}`)
+                }
+              >
+                Remove PACE
+              </Button>
+            )}
+            {removableInSubject(selected.subject_id).length > 0 && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={() => {
+                  const ids = removableInSubject(selected.subject_id).map((slot) => slot.id);
+                  removeSlots(ids, `${ids.length} unstarted PACE box(es) in this subject`);
+                }}
+              >
+                Remove unstarted in this subject ({removableInSubject(selected.subject_id).length})
+              </Button>
+            )}
+          </div>
         </div>
       )}
 
@@ -699,6 +967,24 @@ export default function LoggedCoursesPanel({
             />
             <Button size="sm" variant="outline" disabled={busy || !schoolStartDate} onClick={saveSchoolStartDate}>
               Save
+            </Button>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap" data-marker="MCA_R3_P3_START_DATE_SHIPS">
+            {schedule.id ? (
+              <span
+                className={`text-xs px-2 py-0.5 rounded-full ${
+                  schedule.auto_from_calendar
+                    ? "bg-green-500/10 text-green-700"
+                    : "bg-secondary text-foreground/70"
+                }`}
+              >
+                {schedule.auto_from_calendar ? "Auto from start date" : "Edited by admin"}
+              </span>
+            ) : (
+              <span className="text-xs text-foreground/50">No ship schedule saved yet</span>
+            )}
+            <Button size="sm" variant="ghost" disabled={busy || !schoolStartDate} onClick={rebuildFromStartDate}>
+              Rebuild from start date
             </Button>
           </div>
           <Label className="text-xs">Ship mode</Label>
@@ -721,8 +1007,14 @@ export default function LoggedCoursesPanel({
             <SelectContent>
               <SelectItem value="fixed_dates">Fixed quarter dates</SelectItem>
               <SelectItem value="every_8_weeks">Every 8 weeks</SelectItem>
+              <SelectItem value="annual">Annual Ship (everything at once)</SelectItem>
             </SelectContent>
           </Select>
+          {enrollmentInfo.frequency === "annual" && schedule.mode !== "annual" && (
+            <p className="text-xs text-amber-700" data-marker="MCA_R3_A5_ANNUAL_SHIP">
+              This family pays annually. Annual Ship sends every PACE for the year in one box.
+            </p>
+          )}
           <Label className="text-xs">Next ship date</Label>
           <Input
             type="date"
@@ -733,7 +1025,15 @@ export default function LoggedCoursesPanel({
             className="bg-background h-9"
           />
         </div>
-        {schedule.mode === "every_8_weeks" ? (
+        {schedule.mode === "annual" ? (
+          <div className="space-y-1 text-sm">
+            <p className="text-xs font-medium text-foreground/70">Annual Ship</p>
+            <p className="text-foreground/70">
+              One shipment on the next ship date with every unshipped PACE prescribed for {schoolYear}.
+              No score check. After it ships, no further dates are scheduled.
+            </p>
+          </div>
+        ) : schedule.mode === "every_8_weeks" ? (
           <div className="space-y-1 text-sm">
             <p className="text-xs font-medium text-foreground/70">Upcoming ship dates</p>
             {[56, 112, 168].map((days) => {
@@ -770,9 +1070,11 @@ export default function LoggedCoursesPanel({
           </div>
         )}
         <p className="text-xs text-foreground/50 sm:col-span-2">
-          {schedule.mode === "every_8_weeks"
-            ? "Every 8 weeks hides the quarter dates. The next ship date stays manual. If it is blank, it defaults to 56 days after today. The preview lists the dates 56, 112, and 168 days after that. One week before the next ship date, pick-list generation takes the next 3 unissued PACEs in each logged subject. If the 6 most recently issued PACEs across subjects lack scores, the shipment pauses and the pick list is marked paused."
-            : "2025-26: Q1 is the first 3 PACEs at enrollment, so that date stays blank. Q2 is 2025-10-26, Q3 is 2026-01-11, and Q4 is 2026-03-08. One week before the next ship date, pick-list generation takes the next 3 unissued PACEs in each logged subject. If the 6 most recently issued PACEs across subjects lack scores, the shipment pauses and the pick list is marked paused."}
+          {schedule.mode === "annual"
+            ? "Annual Ship: one pick list with every unshipped PACE for the year, generated one week before the ship date."
+            : schedule.mode === "every_8_weeks"
+            ? "Every 8 weeks hides the quarter dates. The next ship date stays manual. If it is blank, it defaults to 56 days after today. The preview lists the dates 56, 112, and 168 days after that. One week before the next ship date, pick-list generation takes the next 3 unshipped PACEs in each logged subject. If the 6 most recently issued PACEs across subjects lack scores, the shipment pauses and the pick list is marked paused."
+            : "2025-26: Q1 is the first 3 PACEs at enrollment, so that date stays blank. Q2 is 2025-10-26, Q3 is 2026-01-11, and Q4 is 2026-03-08. One week before the next ship date, pick-list generation takes the next 3 unshipped PACEs in each logged subject. If the 6 most recently issued PACEs across subjects lack scores, the shipment pauses and the pick list is marked paused."}
         </p>
         <div className="flex flex-wrap gap-2 sm:col-span-2">
           <Button size="sm" variant="outline" onClick={saveSchedule} disabled={busy}>

@@ -44,6 +44,7 @@ const PortalLayout = () => {
   const [students, setStudents] = useState<PortalStudent[]>([]);
   const [selectedStudentId, setSelectedStudentId] = useState<string>("");
   const [linkError, setLinkError] = useState<string | null>(null);
+  const [highSchoolIds, setHighSchoolIds] = useState<string[]>([]);
 
   useEffect(() => {
     const init = async () => {
@@ -112,6 +113,18 @@ const PortalLayout = () => {
         setStudents(studentsRes.data as PortalStudent[]);
         if (studentsRes.data.length > 0)
           setSelectedStudentId(studentsRes.data[0].id);
+        // Round 3 P1: Academic Projection link only for high school students.
+        const ids = studentsRes.data.map((s) => s.id);
+        if (ids.length > 0) {
+          const hsRes = await supabase
+            .from("enrollments")
+            .select("student_id")
+            .in("student_id", ids)
+            .eq("tuition_tier", "high_school");
+          setHighSchoolIds(
+            Array.from(new Set((hsRes.data ?? []).map((r) => r.student_id as string))),
+          );
+        }
       } else if (studentsRes.error) {
         console.error("Portal students lookup failed", studentsRes.error);
       }
@@ -187,6 +200,15 @@ const PortalLayout = () => {
               >
                 PACE Status
               </NavLink>
+              {selectedStudent && highSchoolIds.includes(selectedStudent.id) && (
+                <NavLink
+                  to={`${PORTAL_ROUTE}/projection`}
+                  className={navLinkClass}
+                  data-marker="MCA_R3_P1_PORTAL_PROJECTION"
+                >
+                  Academic Projection
+                </NavLink>
+              )}
               <NavLink
                 to={`${PORTAL_ROUTE}/supervisor-report`}
                 className={navLinkClass}

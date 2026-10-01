@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Printer, Download } from "lucide-react";
+import { printPackingSlips, type PackingSlip } from "./AdminPickLists";
 import {
   Select,
   SelectContent,
@@ -30,6 +31,7 @@ type OrderStatus = "submitted" | "confirmed" | "fulfilled" | "cancelled";
 interface OrderItemRow {
   quantity: number;
   unit_price_at_order: number;
+  backordered?: boolean | null;
   items: { original_name: string; sku: string } | null;
 }
 
@@ -84,7 +86,7 @@ const AdminOrders = () => {
         `
         id, customer_name, customer_email, customer_phone, status, payment_status,
         shipping_address, shipping_fee, total, created_at,
-        order_items ( quantity, unit_price_at_order, items ( original_name, sku ) )
+        order_items ( quantity, unit_price_at_order, backordered, items ( original_name, sku ) )
       `,
       )
       .order("created_at", { ascending: false });
@@ -238,6 +240,34 @@ const AdminOrders = () => {
     const div = document.createElement("div");
     div.textContent = str;
     return div.innerHTML;
+  };
+
+  // Round 3 A4 (marker MCA_R3_A4_PACKING_LIST): customer-facing packing list, no prices.
+  const printPackingList = (order: Order) => {
+    const slip: PackingSlip = {
+      reference: `Order ${order.id.slice(0, 8).toUpperCase()}`,
+      date: new Date(order.created_at).toLocaleDateString(),
+      shipTo: {
+        name: order.customer_name || "Customer",
+        addressLines: order.shipping_address
+          ? order.shipping_address.split(/\n/).map((l) => l.trim())
+          : ["Local Pickup"],
+        phone: order.customer_phone,
+        email: order.customer_email,
+      },
+      lines: order.order_items.map((oi) => ({
+        name: oi.items?.original_name ?? "Item",
+        quantity: oi.quantity,
+        note: oi.backordered ? "Backordered - ships later" : "",
+      })),
+    };
+    if (!printPackingSlips([slip])) {
+      toast({
+        title: "Couldn't open print window",
+        description: "Allow pop-ups to print the packing list.",
+        variant: "destructive",
+      });
+    }
   };
 
   const printOrder = (order: Order) => {
@@ -593,7 +623,17 @@ const AdminOrders = () => {
                     onClick={() => printOrder(order)}
                   >
                     <Printer className="h-3 w-3 mr-1.5" />
-                    Print Pick List
+                    Order summary
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 text-xs"
+                    onClick={() => printPackingList(order)}
+                    data-marker="MCA_R3_A4_PACKING_LIST"
+                  >
+                    <Printer className="h-3 w-3 mr-1.5" />
+                    Print packing list
                   </Button>
                   {order.payment_status === "paid" &&
                     order.status !== "cancelled" && (
