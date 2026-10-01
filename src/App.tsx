@@ -18,7 +18,7 @@ import AdminOrders from "./pages/admin/AdminOrders";
 import AdminPlans from "./pages/admin/AdminPlans";
 import AdminInventory from "./pages/admin/AdminInventory";
 import AdminUsers from "./pages/admin/AdminUsers";
-import AdminSettings from "./pages/admin/AdminSettings";
+import AdminSettings, { AdminEmailTemplates } from "./pages/admin/AdminSettings";
 import AdminFamilies from "./pages/admin/AdminFamilies";
 import AdminCompEnroll from "./pages/admin/AdminCompEnroll";
 import AdminFamilyDetail from "./pages/admin/AdminFamilyDetail";
@@ -78,7 +78,7 @@ const App = () => (
             <Route path="pick-lists" element={<AdminPickLists />} />
             <Route path="backorders" element={<AdminBackorders />} />
             <Route path="test-reviews" element={<AdminTestReviews />} />
-            <Route path="emails" element={<AdminSettings />} />
+            <Route path="emails" element={<div className="max-w-2xl"><AdminEmailTemplates /></div>} />
             <Route
               path="families/:familyId/students/:studentId/transcript"
               element={<AdminTranscript />}
