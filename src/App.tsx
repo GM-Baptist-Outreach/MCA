@@ -18,7 +18,7 @@ import AdminOrders from "./pages/admin/AdminOrders";
 import AdminPlans from "./pages/admin/AdminPlans";
 import AdminInventory from "./pages/admin/AdminInventory";
 import AdminUsers from "./pages/admin/AdminUsers";
-import AdminSettings, { AdminEmailTemplates } from "./pages/admin/AdminSettings";
+import AdminSettings, { AdminEmailTemplates, AdminReenrollment } from "./pages/admin/AdminSettings";
 import AdminFamilies from "./pages/admin/AdminFamilies";
 import AdminCompEnroll from "./pages/admin/AdminCompEnroll";
 import AdminFamilyDetail from "./pages/admin/AdminFamilyDetail";
@@ -28,7 +28,6 @@ import AdminAcademicProjection, {
 } from "./pages/admin/AdminAcademicProjection";
 import AdminPickLists from "./pages/admin/AdminPickLists";
 import { AdminTestReviews } from "./pages/admin/AdminFamilyDetail";
-import AdminReenrollment from "./pages/admin/AdminReenrollment";
 import Store from "./pages/Store";
 import PortalLogin from "./pages/portal/PortalLogin";
 import PortalLayout from "./pages/portal/PortalLayout";
