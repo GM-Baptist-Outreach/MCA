@@ -12,7 +12,7 @@ import CurriculumGuide from "./pages/CurriculumGuide";
 import Contact from "./pages/Contact";
 import NotFound from "./pages/NotFound";
 import AdminLogin from "./pages/admin/AdminLogin";
-import AdminLayout, { AdminHelp } from "./pages/admin/AdminLayout";
+import AdminLayout, { AdminDashboard, AdminHelp } from "./pages/admin/AdminLayout";
 import AdminEnrollments from "./pages/admin/AdminEnrollments";
 import AdminOrders from "./pages/admin/AdminOrders";
 import AdminPlans from "./pages/admin/AdminPlans";
@@ -26,7 +26,7 @@ import AdminTranscript from "./pages/admin/AdminTranscript";
 import AdminAcademicProjection, {
   PortalAcademicProjection,
 } from "./pages/admin/AdminAcademicProjection";
-import AdminPickLists, { AdminBackorders } from "./pages/admin/AdminPickLists";
+import AdminPickLists from "./pages/admin/AdminPickLists";
 import { AdminTestReviews } from "./pages/admin/AdminFamilyDetail";
 import Store from "./pages/Store";
 import PortalLogin from "./pages/portal/PortalLogin";
@@ -67,7 +67,7 @@ const App = () => (
           </Route>
           <Route path="/admin/login" element={<AdminLogin />} />
           <Route path="/admin" element={<AdminLayout />}>
-            <Route index element={<Navigate to="enrollments" replace />} />
+            <Route index element={<AdminDashboard />} />
             <Route path="enrollments" element={<AdminEnrollments />} />
             <Route path="orders" element={<AdminOrders />} />
             <Route path="plans" element={<AdminPlans />} />
@@ -78,7 +78,7 @@ const App = () => (
             <Route path="enroll-comp" element={<AdminCompEnroll />} />
             <Route path="families/:familyId" element={<AdminFamilyDetail />} />
             <Route path="pick-lists" element={<AdminPickLists />} />
-            <Route path="backorders" element={<AdminBackorders />} />
+            <Route path="backorders" element={<Navigate to="/admin/pick-lists?tab=backordered" replace />} />
             <Route path="test-reviews" element={<AdminTestReviews />} />
             <Route path="emails" element={<div className="max-w-2xl"><AdminEmailTemplates /></div>} />
             <Route path="help" element={<AdminHelp />} />

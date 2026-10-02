@@ -294,7 +294,7 @@ function ItemEditDialog({
             <Input value={draft.original_name} onChange={(e) => set("original_name", e.target.value)} />
           </div>
           <div className="sm:col-span-2 space-y-1">
-            <Label className="text-xs">Short description ({draft.short_description.length}/300)</Label>
+            <Label className="text-xs">Short description ({draft.short_description.length} of 300)</Label>
             <Textarea
               rows={3}
               maxLength={300}

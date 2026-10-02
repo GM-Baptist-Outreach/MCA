@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import AdminSettings from "@/pages/admin/AdminSettings";
 
 const { fromMock, upsertMock, maybeSingleMock, toastMock } = vi.hoisted(() => ({
@@ -46,7 +47,11 @@ describe("Admin payment mode toggle", () => {
   });
 
   it("shows Live and writes Test after confirmation", async () => {
-    render(<AdminSettings />);
+    render(
+      <MemoryRouter>
+        <AdminSettings />
+      </MemoryRouter>,
+    );
 
     expect(await screen.findByTestId("payment-mode-current")).toHaveTextContent("Live");
     expect(screen.getByText(/Test = Stripe Sandbox \+ Shippo test rates/)).toBeInTheDocument();
