@@ -12,7 +12,7 @@ import CurriculumGuide from "./pages/CurriculumGuide";
 import Contact from "./pages/Contact";
 import NotFound from "./pages/NotFound";
 import AdminLogin from "./pages/admin/AdminLogin";
-import AdminLayout from "./pages/admin/AdminLayout";
+import AdminLayout, { AdminHelp } from "./pages/admin/AdminLayout";
 import AdminEnrollments from "./pages/admin/AdminEnrollments";
 import AdminOrders from "./pages/admin/AdminOrders";
 import AdminPlans from "./pages/admin/AdminPlans";
@@ -81,6 +81,7 @@ const App = () => (
             <Route path="backorders" element={<AdminBackorders />} />
             <Route path="test-reviews" element={<AdminTestReviews />} />
             <Route path="emails" element={<div className="max-w-2xl"><AdminEmailTemplates /></div>} />
+            <Route path="help" element={<AdminHelp />} />
             <Route
               path="families/:familyId/students/:studentId/transcript"
               element={<AdminTranscript />}

@@ -10,6 +10,9 @@ const RAW_HTML_KEYS = new Set([
   "order_items",
   "missing_scores",
   "book_list",
+  "shipment_items",
+  "tracking_line",
+  "overdue_list",
 ]);
 
 export type TemplateVars = Record<string, string | number | null | undefined>;
@@ -131,4 +134,12 @@ export const SAMPLE_TEMPLATE_VARS: TemplateVars = {
   missing_scores: "<ul><li>Math PACE 1037</li></ul>",
   book_list: "<ul><li>Heidi – $12.00</li></ul>",
   store_url: "https://mcahomeschool.com/store?add=sample",
+  shipment_label: "Jordan Sample's PACEs",
+  shipment_items: "<ul><li>Math PACE 1037</li><li>English PACE 1037</li></ul>",
+  tracking_number: "9400111899223197428490",
+  tracking_url: "https://tools.usps.com/go/TrackConfirmAction?tLabels=9400111899223197428490",
+  tracking_line:
+    '<p><strong>Tracking:</strong> <a href="https://tools.usps.com/go/TrackConfirmAction?tLabels=9400111899223197428490">9400111899223197428490</a></p>',
+  student_names: "Jordan Sample",
+  overdue_list: "<ul><li>Jordan Sample: Math PACE 1037 (handed out Sep 1)</li></ul>",
 };
