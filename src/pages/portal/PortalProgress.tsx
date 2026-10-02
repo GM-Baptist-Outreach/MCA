@@ -301,7 +301,7 @@ export default function PortalProgress() {
           </p>
         </div>
         {prescribed.subjects.length > 0 && (
-          <Button onClick={() => setShowForm((v) => !v)}>
+          <Button onClick={() => setShowForm((v) => !v)} data-tour="portal-upload-button">
             <Upload className="h-4 w-4 mr-1.5" />
             {showForm ? "Cancel" : "Upload a Test Score"}
           </Button>

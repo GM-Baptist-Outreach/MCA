@@ -48,7 +48,7 @@ function SubmittedForms() {
   const visible = rows.filter((row) => studentFilter === "all" || row.student_id === studentFilter);
 
   return (
-    <section className="space-y-3" data-marker="MCA_R4_SUBMITTED_FORMS">
+    <section className="space-y-3" data-marker="MCA_R4_SUBMITTED_FORMS" data-tour="portal-submitted-forms">
       <div className="flex items-end justify-between gap-3 flex-wrap">
         <div>
           <h3 className="text-xl font-bold font-serif text-primary">Submitted forms</h3>
@@ -143,7 +143,7 @@ export default function PortalForms() {
   return (
     <div className="space-y-6">
       <h2 className="text-2xl font-bold font-serif text-primary">Forms</h2>
-      <div className="space-y-3">
+      <div className="space-y-3" data-tour="portal-forms-list">
         {FORMS.map((form) => (
           <Link
             key={form.slug}

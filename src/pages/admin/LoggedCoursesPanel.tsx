@@ -749,6 +749,7 @@ export default function LoggedCoursesPanel({
           variant="outline"
           onClick={() => setShowPrescribeAll((v) => !v)}
           disabled={busy}
+          data-tour="admin-prescribe-all"
         >
           {showPrescribeAll ? "Close" : "Prescribe all core subjects"}
         </Button>
@@ -1010,6 +1011,7 @@ export default function LoggedCoursesPanel({
             </Button>
           </div>
           <Label className="text-xs">Ship mode</Label>
+          <div data-tour="admin-ship-schedule">
           <Select
             value={schedule.mode}
             onValueChange={(mode) =>
@@ -1032,6 +1034,7 @@ export default function LoggedCoursesPanel({
               <SelectItem value="annual">Annual Ship (everything at once)</SelectItem>
             </SelectContent>
           </Select>
+          </div>
           {enrollmentInfo.frequency === "annual" && schedule.mode !== "annual" && (
             <p className="text-xs text-amber-700" data-marker="MCA_R3_A5_ANNUAL_SHIP">
               This family pays annually. Annual Ship sends every PACE for the year in one box.

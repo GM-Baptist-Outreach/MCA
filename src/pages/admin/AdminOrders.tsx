@@ -474,7 +474,7 @@ const AdminOrders = () => {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <h2 className="text-2xl font-bold font-serif text-primary">
+        <h2 className="text-2xl font-bold font-serif text-primary" data-tour="admin-orders">
           Store Orders
         </h2>
         <Button variant="outline" size="sm" onClick={exportCsv}>

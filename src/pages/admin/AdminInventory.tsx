@@ -973,7 +973,7 @@ export default function AdminInventory() {
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-semibold">Inventory Pricing</h1>
+          <h1 className="text-2xl font-semibold" data-tour="admin-inventory">Inventory Pricing</h1>
           <p className="text-sm text-muted-foreground">
             {filteredItems.length} of {items.length} items
           </p>
@@ -1405,6 +1405,7 @@ export default function AdminInventory() {
                         size="sm"
                         variant="outline"
                         onClick={() => setDetailItem(item)}
+                        data-tour={index === 0 ? "admin-inventory-edit" : undefined}
                       >
                         Edit
                       </Button>

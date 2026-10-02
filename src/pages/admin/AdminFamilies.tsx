@@ -85,7 +85,7 @@ const AdminFamilies = () => {
       {loading ? (
         <p className="text-foreground/60">Loading...</p>
       ) : (
-        <div className="rounded-xl border border-border/50 overflow-x-auto">
+        <div className="rounded-xl border border-border/50 overflow-x-auto" data-tour="admin-families-list">
           <table className="w-full text-sm">
             <thead className="bg-secondary text-left">
               <tr>
@@ -98,7 +98,7 @@ const AdminFamilies = () => {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((f) => (
+              {filtered.map((f, i) => (
                 <tr
                   key={f.id}
                   className="border-t border-border/50 hover:bg-secondary/30"
@@ -115,6 +115,7 @@ const AdminFamilies = () => {
                     <Link
                       to={`/admin/families/${f.id}`}
                       className="flex items-center gap-1 text-primary hover:underline"
+                      data-tour={i === 0 ? "admin-family-view" : undefined}
                     >
                       View <ChevronRight className="h-3.5 w-3.5" />
                     </Link>
