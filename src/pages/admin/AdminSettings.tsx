@@ -204,7 +204,7 @@ function AutomaticEmails() {
     (Array.isArray(row.students) ? row.students[0] : row.students)?.student_name ?? "";
 
   return (
-    <section className="space-y-3 rounded-xl border border-border/50 p-4" data-marker="MCA_R4_EMAIL_SWITCHES">
+    <section className="space-y-3 rounded-xl border border-border/50 p-4" data-marker="MCA_R4_EMAIL_SWITCHES" data-tour="admin-email-switches">
       <div>
         <h3 className="text-lg font-bold font-serif text-primary">Automatic emails</h3>
         <p className="text-sm text-foreground/60">
@@ -555,7 +555,7 @@ const AdminSettings = () => {
   return (
     <div className="space-y-6 max-w-2xl">
       <div>
-        <h2 className="text-2xl font-bold font-serif text-primary mb-2">
+        <h2 className="text-2xl font-bold font-serif text-primary mb-2" data-tour="admin-settings">
           Payment Mode (Test/Live)
         </h2>
         <p className="text-sm text-foreground/80">

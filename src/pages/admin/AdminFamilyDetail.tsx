@@ -1120,10 +1120,11 @@ const AdminFamilyDetail = () => {
       </div>
 
       <div className="space-y-6">
-        {students.map((student) => (
+        {students.map((student, studentIndex) => (
           <div
             key={student.id}
             className="rounded-xl border border-border/50 bg-secondary/30 p-5 space-y-4"
+            data-tour={studentIndex === 0 ? "admin-student-card" : undefined}
           >
             <div className="flex items-center justify-between flex-wrap gap-2">
               <h3 className="font-semibold text-foreground text-lg">
@@ -1618,7 +1619,7 @@ export function AdminTestReviews({
     <div className="space-y-4">
       {!embedded && (
         <div>
-          <h2 className="text-2xl font-bold font-serif text-primary">Test Reviews</h2>
+          <h2 className="text-2xl font-bold font-serif text-primary" data-tour="admin-test-reviews">Test Reviews</h2>
           <p className="text-sm text-foreground/60">
             Uploaded tests waiting for MCA. PACE numbers are the ACE numbers parents see.
           </p>

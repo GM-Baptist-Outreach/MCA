@@ -348,7 +348,7 @@ export default function AdminPickLists() {
     <div className="space-y-6 print:space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap print:hidden">
         <div>
-          <h2 className="text-2xl font-bold font-serif text-primary">Pick lists</h2>
+          <h2 className="text-2xl font-bold font-serif text-primary" data-tour="admin-pick-lists">Pick lists</h2>
           <p className="text-sm text-foreground/60">
             Due lists are the ones whose next ship date is within 7 days.
             Paused rows are the admin flag for missing scores. A backordered
@@ -369,6 +369,7 @@ export default function AdminPickLists() {
             onClick={() => printSlips(lists.filter((list) => list.status === "ready"))}
             disabled={readyCount === 0}
             data-marker="MCA_R3_A4_PACKING_LIST"
+            data-tour="admin-packing-lists"
           >
             <Printer className="h-4 w-4 mr-1.5" />
             Packing lists, all ready (one family per page)

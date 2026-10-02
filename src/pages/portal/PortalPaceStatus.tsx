@@ -300,7 +300,7 @@ export default function PortalPaceStatus() {
 
   return (
     <div className="space-y-6">
-      <div>
+      <div data-tour="portal-pace-status">
         <h2 className="text-2xl font-bold font-serif text-primary">
           PACE Status
         </h2>
@@ -352,7 +352,7 @@ export default function PortalPaceStatus() {
           </Select>
         )}
         {shippedAll > 0 && (
-          <div className="flex gap-2 flex-wrap" data-marker="MCA_R3_P2_RECEIVE_ALL">
+          <div className="flex gap-2 flex-wrap" data-marker="MCA_R3_P2_RECEIVE_ALL" data-tour="portal-receive-all">
             {showTableFlag(group, electiveSubjectId) && shippedInView > 0 && (
               <Button
                 size="sm"
