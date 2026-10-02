@@ -7,14 +7,17 @@ import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 // in a branded confirmation email to the admin.
 // Round 9c (MCA_R9C_TICKET_FROM_DAVID): the ticket email to support is sent
 // FROM david@mcahomeschool.com (verified sending domain) with a display name
-// naming the submitting admin ("Chase Kelly via MCA"), and Reply-To David's
-// inbox. The submitting admin's name and verified email (from the JWT, never
-// the request body) are shown at the top of the ticket body.
+// naming the submitting admin ("Chase Kelly via MCA").
+// Round 9e (MCA_R9E_REPLY_BANNER): the support inbox replies to the sender
+// contact, not Reply-To, so the ticket opens with a banner (first line of the
+// HTML and plain-text bodies): "Do not reply here. Instead, reply directly
+// to: <Admin Name> <admin@email>". Reply-To is the admin's email as a backup.
+// The admin's name and email come from the verified JWT, never the body.
 //
 // Actions (POST JSON, admin JWT required):
 //   { action: "send", topic, message, page_url?, screenshot_path? }
 //       Logs the feedback in public.admin_feedback, then emails it through
-//       Resend to FEEDBACK_TO (from/reply-to David, admin named in the body)
+//       Resend to FEEDBACK_TO (from David, reply banner + reply-to = admin)
 //       and the page they were on, then sends the admin a confirmation.
 //       A screenshot (uploaded by the admin to the private admin-feedback
 //       bucket under <their user id>/) is attached.
@@ -23,10 +26,8 @@ import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 //       stores it on the row (delivery_status).
 
 const FEEDBACK_TO = "support@reply.gmbaptistoutreach.com";
-// Ticket email to support. mcahomeschool.com is the verified Resend domain but
-// has no inbox, so Reply-To is David's real mailbox (same as parent emails).
+// Ticket email to support, sent from the verified mcahomeschool.com domain.
 const TICKET_FROM_EMAIL = "david@mcahomeschool.com";
-const TICKET_REPLY_TO = "david@midwestchristianacademy.com";
 // Confirmation email to the submitting admin (unchanged).
 const FEEDBACK_FROM = "MCA Admin Feedback <admin@mcahomeschool.com>";
 const TOPICS = new Set(["Problem or bug", "Question", "Idea or request", "Help Center content", "Other"]);
@@ -47,6 +48,20 @@ export function formatTicket(n: number | string | null | undefined): string {
 export function ticketFrom(name: string | null, email: string | null): string {
   const label = (name || email || "MCA admin").replace(/["<>,;\\\r\n]/g, " ").replace(/\s+/g, " ").trim().slice(0, 60);
   return `"${label || "MCA admin"} via MCA" <${TICKET_FROM_EMAIL}>`;
+}
+
+// "Do not reply here. Instead, reply directly to: <Admin Name> <admin@email>"
+export function replyBanner(name: string | null, email: string | null): { html: string; text: string } {
+  const lead = "Do not reply here. Instead, reply directly to:";
+  const cleanName = (name ?? "").replace(/[\r\n]/g, " ").trim();
+  if (!email) {
+    const who = cleanName || "the admin who sent this ticket";
+    return { html: `${lead} ${escapeHtml(who)}`, text: `${lead} ${who}` };
+  }
+  const link = `<a href="mailto:${escapeHtml(email)}" style="color:#14213d">${escapeHtml(email)}</a>`;
+  return cleanName
+    ? { html: `${lead} ${escapeHtml(cleanName)} &lt;${link}&gt;`, text: `${lead} ${cleanName} <${email}>` }
+    : { html: `${lead} ${link}`, text: `${lead} ${email}` };
 }
 
 function isEmail(value: string | null | undefined): value is string {
@@ -156,12 +171,10 @@ async function sendFeedback(admin: Admin, body: Record<string, unknown>): Promis
   const subject = `MCA feedback #${ticket}: ${topic}${message.includes("[TEST]") ? " [TEST]" : ""}`;
   // The admin's email comes only from the verified session (authorize() -> auth.getUser()).
   const replyTo = isEmail(admin.email) ? admin.email : undefined;
-  const submitter = admin.name
-    ? `${escapeHtml(admin.name)} &lt;${escapeHtml(admin.email ?? "no email")}&gt;`
-    : escapeHtml(admin.email ?? "Unknown admin");
+  const banner = replyBanner(admin.name, replyTo ?? null);
   const html = `<div style="font-family: Georgia, serif; color: #1a1a2e; max-width: 640px;">
+  <div style="margin:0 0 14px;padding:12px 16px;background:#fff3cd;border:2px solid #c9a227;border-radius:6px;font-size:16px;font-weight:bold;color:#14213d">${banner.html}</div>
   <h2 style="margin:0 0 8px">Ticket #${ticket}: new feedback from the MCA admin Help Center</h2>
-  <p style="margin:0 0 10px;padding:8px 12px;background:#eef2f8;border-left:4px solid #14213d;font-size:15px"><b>Submitted by:</b> ${submitter}</p>
   <table style="border-collapse:collapse;font-size:14px">
     <tr><td style="padding:2px 12px 2px 0;color:#666">Ticket</td><td>#${ticket}</td></tr>
     <tr><td style="padding:2px 12px 2px 0;color:#666">From</td><td>${escapeHtml(who)}</td></tr>
@@ -171,8 +184,22 @@ async function sendFeedback(admin: Admin, body: Record<string, unknown>): Promis
     <tr><td style="padding:2px 12px 2px 0;color:#666">Screenshot</td><td>${attachments.length ? "attached" : "none"}</td></tr>
   </table>
   <p style="white-space:pre-wrap;border-left:4px solid #c9a227;padding:8px 12px;background:#fbf6e6">${escapeHtml(message)}</p>
-  <p style="font-size:12px;color:#888">Ticket #${ticket} · feedback id ${inserted.id}. Submitted by ${submitter}. To answer the admin, write to ${replyTo ? escapeHtml(replyTo) : "their email"}; replying to this email goes to ${TICKET_REPLY_TO}.</p>
+  <p style="font-size:12px;color:#888">Ticket #${ticket} · feedback id ${inserted.id}.</p>
 </div>`;
+  const plainText = [
+    banner.text,
+    "",
+    `Ticket #${ticket}: new feedback from the MCA admin Help Center`,
+    `From: ${who}`,
+    `Topic: ${topic}`,
+    `Page: ${pageUrl ?? "(not recorded)"}`,
+    `Sent: ${sentAt} Eastern`,
+    `Screenshot: ${attachments.length ? "attached" : "none"}`,
+    "",
+    message,
+    "",
+    `Ticket #${ticket} · feedback id ${inserted.id}.`,
+  ].join("\n");
 
   const key = Deno.env.get("RESEND_API_KEY");
   let status: "sent" | "failed" = "failed";
@@ -187,9 +214,10 @@ async function sendFeedback(admin: Admin, body: Record<string, unknown>): Promis
       body: JSON.stringify({
         from: ticketFrom(admin.name, admin.email),
         to: [FEEDBACK_TO],
-        reply_to: TICKET_REPLY_TO,
+        reply_to: replyTo,
         subject,
         html,
+        text: plainText,
         attachments: attachments.length ? attachments : undefined,
       }),
     });
