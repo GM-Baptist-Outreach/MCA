@@ -23,26 +23,56 @@ const SUPABASE_URL = "https://proiyioqfbjcmprsnqhf.supabase.co";
 
 // ---------------------------------------------------------------------------
 // MCA_R4_WELCOME_TOUR: first-login walkthrough. Dismissal is remembered per
-// login (auth user id) in this browser's localStorage. "Tour" in the nav
-// reopens it any time.
+// parent account in families.tour_dismissed_at (MCA_R5_TOUR_DISMISS_DB), so it
+// follows the parent to any browser or device. This browser's localStorage
+// (keyed by auth user id) is kept as a fast cache and as a fallback if the
+// database write fails; a local-only dismissal (from before this change, or
+// from a failed write) is synced up to the account on the next portal load.
+// "Tour" in the nav reopens it any time.
 // ---------------------------------------------------------------------------
 
 const TOUR_STORAGE_PREFIX = "mca_portal_tour_dismissed_v1:";
 
-export function tourDismissed(userId: string): boolean {
+function localTourDismissedAt(userId: string): string | null {
   try {
-    return window.localStorage.getItem(TOUR_STORAGE_PREFIX + userId) != null;
+    return window.localStorage.getItem(TOUR_STORAGE_PREFIX + userId);
   } catch {
-    return false;
+    return null;
   }
 }
 
-function rememberTourDismissed(userId: string) {
+export function tourDismissed(userId: string): boolean {
+  return localTourDismissedAt(userId) != null;
+}
+
+function rememberTourDismissed(userId: string, at: string = new Date().toISOString()) {
   try {
-    window.localStorage.setItem(TOUR_STORAGE_PREFIX + userId, new Date().toISOString());
+    window.localStorage.setItem(TOUR_STORAGE_PREFIX + userId, at);
   } catch {
-    // Private browsing can block storage. The tour just shows again next time.
+    // Private browsing can block storage. The account copy still applies.
   }
+}
+
+// Valid ISO timestamp from the local cache, or now (older/odd values).
+function toTimestamp(value: string | null): string {
+  if (value && !Number.isNaN(Date.parse(value))) return new Date(value).toISOString();
+  return new Date().toISOString();
+}
+
+// Saves the dismissal on the parent's own families row (RLS:
+// parent_update_own_family). Only fills it in when still empty, so reopening
+// the tour later keeps the first dismissal time. Returns true on success.
+async function saveTourDismissedToAccount(familyId: string, at: string): Promise<boolean> {
+  const { error } = await supabase
+    .from("families")
+    .update({ tour_dismissed_at: at })
+    .eq("id", familyId)
+    .is("tour_dismissed_at", null);
+  if (error) {
+    console.error("Couldn't save tour dismissal to account", error);
+    return false;
+  }
+  return true;
 }
 
 interface TourStep {
@@ -193,6 +223,7 @@ export interface PortalFamily {
   email: string;
   phone: string;
   address: string | null;
+  tour_dismissed_at?: string | null;
 }
 
 export interface PortalStudent {
@@ -220,6 +251,8 @@ const PortalLayout = () => {
   const [linkError, setLinkError] = useState<string | null>(null);
   const [highSchoolIds, setHighSchoolIds] = useState<string[]>([]);
   const [tourOpen, setTourOpen] = useState(false);
+  // True once the account (families.tour_dismissed_at) has the dismissal.
+  const [tourSavedToAccount, setTourSavedToAccount] = useState(false);
 
   useEffect(() => {
     const init = async () => {
@@ -259,7 +292,7 @@ const PortalLayout = () => {
       // theirs, and .single() would fail exactly like this.
       const familyRes = await supabase
         .from("families")
-        .select("id, parent_name, second_parent_name, email, phone, address")
+        .select("id, parent_name, second_parent_name, email, phone, address, tour_dismissed_at")
         .eq("auth_user_id", currentSession.user.id)
         .maybeSingle();
 
@@ -304,16 +337,38 @@ const PortalLayout = () => {
         console.error("Portal students lookup failed", studentsRes.error);
       }
 
-      // First login in this browser for this parent: show the welcome tour.
-      if (!tourDismissed(currentSession.user.id)) setTourOpen(true);
+      // Welcome tour: show it only if this account hasn't dismissed it.
+      const userId = currentSession.user.id;
+      const accountDismissedAt = familyRes.data.tour_dismissed_at ?? null;
+      const localDismissedAt = localTourDismissedAt(userId);
+      if (accountDismissedAt) {
+        // Dismissed on the account (maybe on another device): refresh the cache.
+        setTourSavedToAccount(true);
+        if (!localDismissedAt) rememberTourDismissed(userId, accountDismissedAt);
+      } else if (localDismissedAt) {
+        // Dismissed in this browser only: sync it up to the account.
+        const familyId = familyRes.data.id;
+        saveTourDismissedToAccount(familyId, toTimestamp(localDismissedAt)).then((ok) => {
+          if (ok) setTourSavedToAccount(true);
+        });
+      } else {
+        setTourOpen(true);
+      }
       setChecking(false);
     };
     init();
   }, []);
 
   const closeTour = () => {
-    if (session?.user?.id) rememberTourDismissed(session.user.id);
     setTourOpen(false);
+    if (!session?.user?.id) return;
+    const at = new Date().toISOString();
+    if (!tourDismissed(session.user.id)) rememberTourDismissed(session.user.id, at);
+    if (family && !tourSavedToAccount) {
+      saveTourDismissedToAccount(family.id, at).then((ok) => {
+        if (ok) setTourSavedToAccount(true);
+      });
+    }
   };
 
   const handleLogout = async () => {
