@@ -281,6 +281,85 @@ export function oklahomaProductTaxCents(productSubtotalCents: number): number {
 }
 
 // ---------------------------------------------------------------------------
+// Round 11 (MCA_R11_STORE_ADDRESS): a full US ship-to address is required on
+// every store checkout. Street line 1 must have a house, PO Box, or route
+// number (a church or business name alone can't be shipped to; it belongs on
+// line 2). The same rules run in the store form and in
+// create-store-order-checkout, so a bad address can never reach Stripe.
+// ---------------------------------------------------------------------------
+
+export const US_STATES: Array<[string, string]> = [
+  ["AL", "Alabama"], ["AK", "Alaska"], ["AZ", "Arizona"], ["AR", "Arkansas"], ["CA", "California"],
+  ["CO", "Colorado"], ["CT", "Connecticut"], ["DE", "Delaware"], ["DC", "District of Columbia"],
+  ["FL", "Florida"], ["GA", "Georgia"], ["HI", "Hawaii"], ["ID", "Idaho"], ["IL", "Illinois"],
+  ["IN", "Indiana"], ["IA", "Iowa"], ["KS", "Kansas"], ["KY", "Kentucky"], ["LA", "Louisiana"],
+  ["ME", "Maine"], ["MD", "Maryland"], ["MA", "Massachusetts"], ["MI", "Michigan"], ["MN", "Minnesota"],
+  ["MS", "Mississippi"], ["MO", "Missouri"], ["MT", "Montana"], ["NE", "Nebraska"], ["NV", "Nevada"],
+  ["NH", "New Hampshire"], ["NJ", "New Jersey"], ["NM", "New Mexico"], ["NY", "New York"],
+  ["NC", "North Carolina"], ["ND", "North Dakota"], ["OH", "Ohio"], ["OK", "Oklahoma"], ["OR", "Oregon"],
+  ["PA", "Pennsylvania"], ["RI", "Rhode Island"], ["SC", "South Carolina"], ["SD", "South Dakota"],
+  ["TN", "Tennessee"], ["TX", "Texas"], ["UT", "Utah"], ["VT", "Vermont"], ["VA", "Virginia"],
+  ["WA", "Washington"], ["WV", "West Virginia"], ["WI", "Wisconsin"], ["WY", "Wyoming"],
+  ["PR", "Puerto Rico"], ["GU", "Guam"], ["VI", "U.S. Virgin Islands"], ["AS", "American Samoa"],
+  ["MP", "Northern Mariana Islands"], ["AA", "Armed Forces Americas"], ["AE", "Armed Forces Europe"],
+  ["AP", "Armed Forces Pacific"],
+];
+
+export function normalizeUsState(raw: string | null | undefined): string | null {
+  const v = String(raw ?? "").trim().replace(/\./g, "").toUpperCase();
+  if (!v) return null;
+  for (const [code, name] of US_STATES) {
+    if (v === code || v === name.toUpperCase().replace(/\./g, "")) return code;
+  }
+  return null;
+}
+
+export type ShipAddressInput = {
+  addressStreet?: string | null;
+  addressStreet2?: string | null;
+  addressCity?: string | null;
+  addressState?: string | null;
+  addressZip?: string | null;
+};
+
+export type ShipAddress = { street: string; street2: string; city: string; state: string; zip: string };
+
+export type ShipAddressCheck = { ok: boolean; address?: ShipAddress; field?: string; error?: string };
+
+export function validateShipAddress(input: ShipAddressInput): ShipAddressCheck {
+  const clean = (s: string | null | undefined) => String(s ?? "").replace(/\s+/g, " ").trim();
+  const street = clean(input.addressStreet);
+  const street2 = clean(input.addressStreet2);
+  const city = clean(input.addressCity);
+  const zip = clean(input.addressZip);
+  if (!street) return { ok: false, field: "street", error: "Please enter your street address." };
+  if (!/\d/.test(street) || street.length < 4) {
+    return {
+      ok: false,
+      field: "street",
+      error:
+        "Please enter a street address with a house or box number (for example 123 Main St or PO Box 45). A church or business name goes on the second line.",
+    };
+  }
+  if (street.length > 100 || street2.length > 100) {
+    return { ok: false, field: "street", error: "Please shorten the street address (100 characters per line)." };
+  }
+  if (city.length < 2 || !/[A-Za-z]/.test(city)) return { ok: false, field: "city", error: "Please enter your city." };
+  const state = normalizeUsState(input.addressState);
+  if (!state) return { ok: false, field: "state", error: "Please choose your state." };
+  if (!/^\d{5}(-?\d{4})?$/.test(zip)) {
+    return { ok: false, field: "zip", error: "Please enter a 5-digit ZIP code." };
+  }
+  const zipNorm = zip.length === 9 ? `${zip.slice(0, 5)}-${zip.slice(5)}` : zip;
+  return { ok: true, address: { street, street2, city, state, zip: zipNorm } };
+}
+
+/** One-line ship-to as saved on orders.shipping_address. */
+export function formatShipAddress(a: ShipAddress): string {
+  return [a.street, a.street2, a.city, `${a.state} ${a.zip}`].filter((p) => p && p.trim()).join(", ");
+}
+
+// ---------------------------------------------------------------------------
 // Pick-list stock. Formerly src/lib/pickListStock.ts.
 // A missing inventory row stays null and is not backordered.
 // A tracked quantity of 0 stays 0 and is backordered. Do not turn 0 into null.

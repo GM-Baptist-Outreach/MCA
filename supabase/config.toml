@@ -47,3 +47,6 @@ verify_jwt = true
 
 [functions.portal-reenroll]
 verify_jwt = true
+
+[functions.store-order-details]
+verify_jwt = true

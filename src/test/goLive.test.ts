@@ -13,8 +13,12 @@ import {
   selectPacesForLevel,
   shouldApplyOklahomaStoreTax,
   suggestedFixedShipDates,
+  validateShipAddress,
+  formatShipAddress,
+  normalizeUsState,
   type PaceSlotLike,
 } from "@/lib/loggedCourses";
+import { shipAddressLines, shipAddressLooksIncomplete } from "@/pages/admin/AdminOrders";
 
 function slot(partial: Partial<PaceSlotLike> & Pick<PaceSlotLike, "id" | "subject_id">): PaceSlotLike {
   return {
@@ -233,5 +237,33 @@ describe("supervisor report letters", () => {
 
   it("names the 2026-27 school year in September 2026", () => {
     expect(currentSchoolYear(new Date("2026-09-28T12:00:00Z"))).toBe("2026-27");
+  });
+});
+
+describe("Round 11 store ship-to address", () => {
+  it("rejects a church name with no street number (the first real order)", () => {
+    const r = validateShipAddress({ addressStreet: "Blessed Hope Baptist Church", addressCity: "Jasonville", addressState: "IN", addressZip: "47438" });
+    expect(r.ok).toBe(false);
+    expect(r.field).toBe("street");
+  });
+  it("rejects missing street, city, bad state, bad ZIP", () => {
+    expect(validateShipAddress({ addressStreet: "", addressCity: "X", addressState: "IN", addressZip: "47438" }).field).toBe("street");
+    expect(validateShipAddress({ addressStreet: "12 Main St", addressCity: "", addressState: "IN", addressZip: "47438" }).field).toBe("city");
+    expect(validateShipAddress({ addressStreet: "12 Main St", addressCity: "Jasonville", addressState: "ZZ", addressZip: "47438" }).field).toBe("state");
+    expect(validateShipAddress({ addressStreet: "12 Main St", addressCity: "Jasonville", addressState: "IN", addressZip: "4743" }).field).toBe("zip");
+  });
+  it("accepts and normalizes a full address with line 2 and PO Boxes", () => {
+    const r = validateShipAddress({ addressStreet: " 123  N Main St ", addressStreet2: "Blessed Hope Baptist Church", addressCity: "Jasonville", addressState: "indiana", addressZip: "474381234" });
+    expect(r.ok).toBe(true);
+    expect(formatShipAddress(r.address!)).toBe("123 N Main St, Blessed Hope Baptist Church, Jasonville, IN 47438-1234");
+    expect(validateShipAddress({ addressStreet: "PO Box 45", addressCity: "Newcastle", addressState: "OK", addressZip: "73065" }).ok).toBe(true);
+    expect(normalizeUsState("Ind.")).toBe(null);
+    expect(normalizeUsState("ok")).toBe("OK");
+  });
+  it("admin helpers split lines and flag incomplete addresses", () => {
+    expect(shipAddressLines("123 N Main St, Blessed Hope Baptist Church, Jasonville, IN 47438")).toEqual(["123 N Main St", "Blessed Hope Baptist Church", "Jasonville, IN 47438"]);
+    expect(shipAddressLooksIncomplete("Blessed Hope Baptist Church, Jasonville, IN 47438")).toBe(true);
+    expect(shipAddressLooksIncomplete("123 N Main St, Jasonville, IN 47438")).toBe(false);
+    expect(shipAddressLooksIncomplete(null)).toBe(false);
   });
 });

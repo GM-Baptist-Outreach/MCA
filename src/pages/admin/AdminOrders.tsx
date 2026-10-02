@@ -24,6 +24,23 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
+// Round 11 (MCA_R11_STORE_ADDRESS): saved ship-to is "line1, line2, City, ST ZIP".
+// Split it into packing-slip lines, and flag one whose first line has no
+// house or box number (it can't be shipped as-is).
+export function shipAddressLines(address: string): string[] {
+  if (/\n/.test(address)) return address.split(/\n/).map((l) => l.trim()).filter(Boolean);
+  const parts = address.split(/,\s*/).map((p) => p.trim()).filter(Boolean);
+  if (parts.length < 3) return [address.trim()];
+  const cityLine = parts.slice(-2).join(", ");
+  return [...parts.slice(0, -2), cityLine];
+}
+
+export function shipAddressLooksIncomplete(address: string | null | undefined): boolean {
+  if (!address) return false;
+  const first = address.split(/[,\n]/)[0] ?? "";
+  return !/\d/.test(first);
+}
+
 const SUPABASE_URL = "https://proiyioqfbjcmprsnqhf.supabase.co";
 
 type OrderStatus = "submitted" | "confirmed" | "fulfilled" | "cancelled";
@@ -262,7 +279,7 @@ const AdminOrders = () => {
       shipTo: {
         name: order.customer_name || "Customer",
         addressLines: order.shipping_address
-          ? order.shipping_address.split(/\n/).map((l) => l.trim())
+          ? shipAddressLines(order.shipping_address)
           : ["Local Pickup"],
         phone: order.customer_phone,
         email: order.customer_email,
@@ -307,7 +324,11 @@ const AdminOrders = () => {
       .join("");
 
     const fulfillmentLine = order.shipping_address
-      ? `Ship to: ${escapeHtml(order.shipping_address)}`
+      ? `Ship to: ${escapeHtml(order.shipping_address)}${
+          shipAddressLooksIncomplete(order.shipping_address)
+            ? ` <strong style="color:#b45309">(no street number: call ${escapeHtml(order.customer_phone ?? "the customer")} to confirm before shipping)</strong>`
+            : ""
+        }`
       : "Local Pickup";
 
     printWindow.document.write(`
@@ -681,13 +702,18 @@ const AdminOrders = () => {
               </div>
 
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-sm">
-                <p className="text-foreground/70">
-                  {order.shipping_address
-                    ? `Ship to: ${order.shipping_address}`
-                    : "Local Pickup"}
-                  {order.shipping_fee != null &&
-                    ` (+$${order.shipping_fee.toFixed(2)} shipping)`}
-                </p>
+                <div className="text-foreground/70 space-y-1">
+                  <p>
+                    {order.shipping_address
+                      ? `Ship to: ${order.shipping_address}`
+                      : "Local Pickup"}
+                    {order.shipping_fee != null &&
+                      ` (+$${order.shipping_fee.toFixed(2)} shipping)`}
+                  </p>
+                  {shipAddressLooksIncomplete(order.shipping_address) && (
+                    <StripeAddressCheck orderId={order.id} phone={order.customer_phone} />
+                  )}
+                </div>
                 <p className="font-bold text-primary">
                   Total: ${order.total.toFixed(2)}
                 </p>
@@ -753,5 +779,49 @@ const AdminOrders = () => {
     </div>
   );
 };
+
+
+/** Round 11: warning plus a read-only look at what Stripe captured. */
+function StripeAddressCheck({ orderId, phone }: { orderId: string; phone: string | null }) {
+  const [result, setResult] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const check = async () => {
+    setBusy(true);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const res = await fetch("https://proiyioqfbjcmprsnqhf.supabase.co/functions/v1/store-order-details", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${sessionData.session?.access_token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ order_id: orderId }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || `Request failed (${res.status})`);
+      const st = data.stripe ?? {};
+      const fmt = (a: { line1?: string | null; line2?: string | null; city?: string | null; state?: string | null; postal_code?: string | null } | null | undefined) =>
+        a ? [a.line1, a.line2, a.city, [a.state, a.postal_code].filter(Boolean).join(" ")].filter(Boolean).join(", ") : "";
+      const found = [
+        st.payment_intent_shipping?.address && `Payment shipping: ${fmt(st.payment_intent_shipping.address)}`,
+        st.customer_details?.address && `Checkout: ${fmt(st.customer_details.address)}`,
+        st.card_billing?.address && `Card billing: ${fmt(st.card_billing.address) || "ZIP only"}`,
+      ].filter(Boolean);
+      setResult(found.length ? found.join(" · ") : "Stripe has no other address for this order.");
+    } catch (err) {
+      setResult(`Couldn't check Stripe: ${(err as Error).message}`);
+    }
+    setBusy(false);
+  };
+  return (
+    <div className="rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900" data-testid="address-incomplete">
+      <p>
+        <strong>No house or box number in this address.</strong> Call {phone || "the customer"} to confirm the street
+        address before shipping.{" "}
+        <button type="button" className="underline" onClick={check} disabled={busy}>
+          {busy ? "Checking..." : "Check what Stripe has"}
+        </button>
+      </p>
+      {result && <p className="mt-1">{result}</p>}
+    </div>
+  );
+}
 
 export default AdminOrders;

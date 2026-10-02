@@ -12,6 +12,7 @@ import {
   quoteStoreShippoRate,
   shippingTierFeeCents,
   shouldQuoteShippo,
+  validateShipAddress,
 } from "../_shared/storeShipping.ts";
 
 // Public store checkout. Prices from items table server-side.
@@ -68,14 +69,29 @@ Deno.serve(async (req: Request) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    if (
-      customer.fulfillment === "ship" &&
-      (!customer.addressStreet || !customer.addressCity || !customer.addressState || !customer.addressZip)
-    ) {
-      return new Response(JSON.stringify({ error: "Missing shipping address" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    // Round 11 (MCA_R11_STORE_ADDRESS): a full, shippable US address is
+    // required for Ship to Me: street with a house/box number, optional line
+    // 2, city, state, ZIP. Normalized values replace what the browser sent.
+    if (customer.fulfillment === "ship") {
+      const checked = validateShipAddress(customer);
+      if (!checked.ok) {
+        return new Response(JSON.stringify({ error: checked.error, field: checked.field }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      const addr = checked.address!;
+      customer.addressStreet = addr.street;
+      customer.addressStreet2 = addr.street2;
+      customer.addressCity = addr.city;
+      customer.addressState = addr.state;
+      customer.addressZip = addr.zip;
+    } else {
+      customer.addressStreet = "";
+      customer.addressStreet2 = "";
+      customer.addressCity = "";
+      customer.addressState = "";
+      customer.addressZip = "";
     }
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -167,6 +183,7 @@ Deno.serve(async (req: Request) => {
             to: {
               name: `${customer.firstName} ${customer.lastName}`.trim(),
               street1: customer.addressStreet,
+              ...(customer.addressStreet2 ? { street2: customer.addressStreet2 } : {}),
               city: customer.addressCity,
               state: customer.addressState,
               zip: customer.addressZip,
@@ -250,6 +267,7 @@ Deno.serve(async (req: Request) => {
           ? {
               address: {
                 line1: customer.addressStreet,
+                line2: customer.addressStreet2 || undefined,
                 city: customer.addressCity,
                 state: customer.addressState,
                 postal_code: customer.addressZip,
@@ -270,7 +288,11 @@ Deno.serve(async (req: Request) => {
       customer_email: customer.email,
       customer_phone: customer.phone,
       fulfillment: customer.fulfillment,
-      address_street: customer.addressStreet || "",
+      // stripe-webhook saves "address_street, city, ST zip" on the order, so
+      // line 2 (apt, suite, church or business name) rides along in it.
+      address_street: [customer.addressStreet, customer.addressStreet2].filter(Boolean).join(", "),
+      address_line1: customer.addressStreet || "",
+      address_line2: customer.addressStreet2 || "",
       address_city: customer.addressCity || "",
       address_state: customer.addressState || "",
       address_zip: customer.addressZip || "",
@@ -313,6 +335,26 @@ Deno.serve(async (req: Request) => {
       line_items,
       allow_promotion_codes: true,
       ...savedCardOptions,
+      // The ship-to also rides on the PaymentIntent, so the full address shows
+      // on the payment in the Stripe dashboard.
+      ...(customer.fulfillment === "ship"
+        ? {
+            payment_intent_data: {
+              shipping: {
+                name: `${customer.firstName} ${customer.lastName}`.trim(),
+                phone: customer.phone,
+                address: {
+                  line1: customer.addressStreet,
+                  line2: customer.addressStreet2 || undefined,
+                  city: customer.addressCity,
+                  state: customer.addressState,
+                  postal_code: customer.addressZip,
+                  country: "US",
+                },
+              },
+            },
+          }
+        : {}),
       success_url: `${siteUrl}/store?status=success`,
       cancel_url: `${siteUrl}/store?status=cancelled`,
       metadata,
