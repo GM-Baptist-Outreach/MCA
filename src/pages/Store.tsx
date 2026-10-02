@@ -38,6 +38,8 @@ import {
   SUBJECT_GROUPS,
   subjectDisplayName,
   subjectGroup,
+  US_STATES,
+  validateShipAddress,
   type CompanionKind,
   type CourseOption,
 } from "@/lib/loggedCourses";
@@ -134,6 +136,7 @@ const emptyCustomer = {
   phone: "",
   fulfillment: "pickup" as "ship" | "pickup",
   addressStreet: "",
+  addressStreet2: "",
   addressCity: "",
   addressState: "",
   addressZip: "",
@@ -156,6 +159,7 @@ export default function Store() {
   const [checkoutStep, setCheckoutStep] = useState<"cart" | "details">("cart");
   const [customer, setCustomer] = useState(emptyCustomer);
   const [formError, setFormError] = useState<string | null>(null);
+  const [addressErrorField, setAddressErrorField] = useState<string | null>(null);
 
   const [searchParams] = useSearchParams();
   const appliedCartLink = useRef(false);
@@ -477,16 +481,17 @@ export default function Store() {
       setFormError("Please enter a 10-digit phone number.");
       return;
     }
-    if (
-      customer.fulfillment === "ship" &&
-      (!customer.addressStreet.trim() ||
-        !customer.addressCity.trim() ||
-        !customer.addressState.trim() ||
-        !customer.addressZip.trim())
-    ) {
-      setFormError("Please fill in your full shipping address.");
-      return;
+    // Round 11 (MCA_R11_STORE_ADDRESS): full, shippable address required.
+    if (customer.fulfillment === "ship") {
+      const checked = validateShipAddress(customer);
+      if (!checked.ok) {
+        setFormError(checked.error);
+        setAddressErrorField(checked.field);
+        document.getElementById(`store-address-${checked.field}`)?.focus();
+        return;
+      }
     }
+    setAddressErrorField(null);
     if (cartLines.length === 0) return;
 
     setCheckingOut(true);
@@ -524,6 +529,7 @@ export default function Store() {
                 ? {
                     ...customer,
                     addressStreet: "",
+                    addressStreet2: "",
                     addressCity: "",
                     addressState: "",
                     addressZip: "",
@@ -539,6 +545,10 @@ export default function Store() {
       console.log("[MCA store] response:", res.status, data);
 
       if (!res.ok || data.error) {
+        if (data.field) {
+          setFormError(data.error);
+          setAddressErrorField(String(data.field));
+        }
         toast({
           title: "Couldn't start checkout",
           description:
@@ -1131,71 +1141,115 @@ export default function Store() {
                   </div>
 
                   {customer.fulfillment === "ship" && (
-                    <div className="space-y-3 pt-2">
+                    <div className="space-y-3 pt-2" data-marker="MCA_R11_STORE_ADDRESS">
                       <div className="space-y-1.5">
                         <Label htmlFor="store-address-street">
-                          Street Address
+                          Street address
                         </Label>
                         <Input
                           id="store-address-street"
+                          autoComplete="address-line1"
+                          placeholder="123 Main St or PO Box 45"
                           value={customer.addressStreet}
-                          onChange={(e) =>
+                          aria-invalid={addressErrorField === "street"}
+                          onChange={(e) => {
+                            setAddressErrorField(null);
                             setCustomer((c) => ({
                               ...c,
                               addressStreet: e.target.value,
-                            }))
-                          }
-                          className="bg-background"
+                            }));
+                          }}
+                          className={`bg-background ${addressErrorField === "street" ? "border-destructive" : ""}`}
                           required
                         />
                       </div>
-                      <div className="grid grid-cols-3 gap-2">
-                        <div className="space-y-1.5 col-span-1">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="store-address-street2">
+                          Apt, suite, church or business name (optional)
+                        </Label>
+                        <Input
+                          id="store-address-street2"
+                          autoComplete="address-line2"
+                          value={customer.addressStreet2 ?? ""}
+                          onChange={(e) =>
+                            setCustomer((c) => ({
+                              ...c,
+                              addressStreet2: e.target.value,
+                            }))
+                          }
+                          className="bg-background"
+                        />
+                      </div>
+                      <div className="grid grid-cols-6 gap-2">
+                        <div className="space-y-1.5 col-span-6 sm:col-span-3">
                           <Label htmlFor="store-address-city">City</Label>
                           <Input
                             id="store-address-city"
+                            autoComplete="address-level2"
                             value={customer.addressCity}
-                            onChange={(e) =>
+                            aria-invalid={addressErrorField === "city"}
+                            onChange={(e) => {
+                              setAddressErrorField(null);
                               setCustomer((c) => ({
                                 ...c,
                                 addressCity: e.target.value,
-                              }))
-                            }
-                            className="bg-background"
+                              }));
+                            }}
+                            className={`bg-background ${addressErrorField === "city" ? "border-destructive" : ""}`}
                             required
                           />
                         </div>
-                        <div className="space-y-1.5 col-span-1">
+                        <div className="space-y-1.5 col-span-3 sm:col-span-1">
                           <Label htmlFor="store-address-state">State</Label>
-                          <Input
+                          <select
                             id="store-address-state"
+                            autoComplete="address-level1"
                             value={customer.addressState}
-                            onChange={(e) =>
+                            aria-invalid={addressErrorField === "state"}
+                            onChange={(e) => {
+                              setAddressErrorField(null);
                               setCustomer((c) => ({
                                 ...c,
                                 addressState: e.target.value,
-                              }))
-                            }
-                            className="bg-background"
+                              }));
+                            }}
+                            className={`flex h-10 w-full rounded-md border bg-background px-2 text-sm ${addressErrorField === "state" ? "border-destructive" : "border-input"}`}
                             required
-                          />
+                          >
+                            <option value="">--</option>
+                            {US_STATES.map(([code, name]) => (
+                              <option key={code} value={code}>
+                                {code} ({name})
+                              </option>
+                            ))}
+                          </select>
                         </div>
-                        <div className="space-y-1.5 col-span-1">
+                        <div className="space-y-1.5 col-span-3 sm:col-span-2">
                           <Label htmlFor="store-address-zip">ZIP</Label>
                           <Input
                             id="store-address-zip"
+                            autoComplete="postal-code"
+                            inputMode="numeric"
+                            maxLength={10}
                             value={customer.addressZip}
-                            onChange={(e) =>
+                            aria-invalid={addressErrorField === "zip"}
+                            onChange={(e) => {
+                              setAddressErrorField(null);
                               setCustomer((c) => ({
                                 ...c,
                                 addressZip: e.target.value,
-                              }))
-                            }
-                            className="bg-background"
+                              }));
+                            }}
+                            className={`bg-background ${addressErrorField === "zip" ? "border-destructive" : ""}`}
                             required
                           />
                         </div>
                       </div>
+                      {formError && addressErrorField && (
+                        <p className="text-sm text-destructive" data-testid="store-address-error">
+                          {formError}
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>
