@@ -31,6 +31,7 @@ import {
   writeTourCache,
   type SpotlightStep,
 } from "../portal/PortalLayout";
+import { formatShortDate, loadReorderForecast, type ReorderRow } from "./AdminInventory";
 
 const ADMIN_ROUTE = "/admin";
 const SUPABASE_URL = "https://proiyioqfbjcmprsnqhf.supabase.co";
@@ -56,7 +57,7 @@ export function adminTourSteps(familyId: string | null): SpotlightStep[] {
       id: "dashboard",
       title: "Today: your dashboard",
       body:
-        "The admin side opens here. Each box is a live count with a link: tests to review, pick lists ready and coming up, backorders, new enrollments this week, and store orders to fulfill.",
+        "The admin side opens here. Each box is a live count with a link: tests to review, pick lists ready and coming up, backorders, new enrollments this week, store orders to fulfill, and items to reorder soon.",
       route: ADMIN_ROUTE,
       target: ["admin-dashboard"],
     },
@@ -93,6 +94,14 @@ export function adminTourSteps(familyId: string | null): SpotlightStep[] {
           "Each student has a card with their enrollment, PACEs, ship schedule, and scores. Most day-to-day changes happen right here.",
         route: familyRoute,
         target: ["admin-student-card"],
+      },
+      {
+        id: "student-records",
+        title: "Report card, transcript, and credits",
+        body:
+          "Download a progress report PDF for a semester or the full year, and for high school students the transcript. The bar shows credits earned, in progress, and still needed to graduate.",
+        route: familyRoute,
+        target: ["admin-student-records", "admin-student-card"],
       },
       {
         id: "prescribe-all",
@@ -162,6 +171,14 @@ export function adminTourSteps(familyId: string | null): SpotlightStep[] {
       target: ["admin-inventory-edit", "admin-inventory"],
     },
     {
+      id: "reorder-plan",
+      title: "Reorder plan",
+      body:
+        "This looks ahead at open pick lists, store orders, and upcoming ship dates, and flags items that will run short. Show only items to reorder, or download the list as a CSV.",
+      route: `${ADMIN_ROUTE}/inventory`,
+      target: ["admin-reorder-plan", "admin-inventory"],
+    },
+    {
       id: "emails",
       title: "Automatic emails",
       body:
@@ -176,6 +193,14 @@ export function adminTourSteps(familyId: string | null): SpotlightStep[] {
         "Settings links to Email Templates and Admin Users, and holds the Payment Mode section. Leave payments on Live: test mode is only for a developer trying out checkout.",
       route: `${ADMIN_ROUTE}/settings`,
       target: ["admin-payment-mode", "admin-settings"],
+    },
+    {
+      id: "sms-webhooks",
+      title: "Text messages",
+      body:
+        "Each text event (test upload overdue, box shipped) has its own webhook URL, switch, and Send test button. The texts themselves are sent by an automation in GM Baptist software.",
+      route: `${ADMIN_ROUTE}/settings`,
+      target: ["admin-sms-webhooks", "admin-settings"],
     },
     {
       id: "help",
@@ -211,7 +236,7 @@ export interface AdminOutletContext {
 // ---------------------------------------------------------------------------
 
 const HELP_FILES_URL = `${SUPABASE_URL}/storage/v1/object/public/help-center`;
-const HELP_FILES_VERSION = "2026-10-02";
+const HELP_FILES_VERSION = "2026-10-02-r8";
 export const GUIDE_PDF_URL = `${HELP_FILES_URL}/How-MCA-Works.pdf?v=${HELP_FILES_VERSION}`;
 
 const helpShot = (name: string) => `${HELP_FILES_URL}/shots/${name}.jpg?v=${HELP_FILES_VERSION}`;
@@ -249,7 +274,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
     category: "Getting around",
     keywords: ["dashboard", "today", "home", "counts", "start page", "landing"],
     body: [
-      "The admin side opens on Today, a dashboard of live counts: tests waiting for review, pick lists ready to pack and boxes due in the next 14 days, open backorders, new enrollments in the last 7 days, and store orders to fulfill.",
+      "The admin side opens on Today, a dashboard of live counts: tests waiting for review, pick lists ready to pack and boxes due in the next 14 days, open backorders, new enrollments in the last 7 days, store orders to fulfill, and items to reorder soon.",
       "Click any box to jump to that list. The counts refresh each time you open the dashboard, and Refresh updates them on the spot.",
     ],
     image: { src: helpShot("r7-dashboard"), alt: "The Today dashboard" },
@@ -477,6 +502,78 @@ export const HELP_ARTICLES: HelpArticle[] = [
     ],
     image: { src: helpShot("r7-orders"), alt: "Store Orders" },
     tourStep: "orders",
+  },
+  // ----- Round 8: reports, credits, reorder, texts (MCA_R8_HELP)
+  {
+    id: "report-pdf",
+    title: "How do I download a progress report or transcript?",
+    category: "Families",
+    keywords: ["report card", "progress report", "pdf", "transcript", "semester", "download", "print"],
+    body: [
+      "Open the family and find the student's card. Under Reports, pick the school year and a period (1st semester, 2nd semester, or the full year), then click Progress report. The PDF downloads right away.",
+      "It has the MCA logo and address, the student's grade, PACEs completed by subject, every test score in that period, and for high school students the credits earned toward graduation. Transcript (high school only) gives the full transcript with GPA as a PDF.",
+      "Semesters follow the report-card quarters: 1st semester is Q1 and Q2, 2nd semester is Q3 and Q4. If the parent set a school start date, the quarters are 9 weeks each from that date; otherwise July-December and January-June.",
+    ],
+    image: { src: helpShot("r8-student-records"), alt: "Reports on a student's card" },
+    tourStep: "student-records",
+  },
+  {
+    id: "credit-tracker",
+    title: "How does the graduation credit bar work?",
+    category: "Families",
+    keywords: ["credits", "graduation", "25 credits", "credit bar", "still needed", "high school"],
+    body: [
+      "High school students show a bar toward the credits required to graduate (25 by default). Green is credits earned (a final average or a transfer credit), yellow is courses in progress, and the rest is still needed.",
+      "Show what's still needed lists the remaining required courses by subject, plus electives. The same bar is on the parent portal and in the PDFs. Change the 25 in Settings, under Graduation and reorder numbers.",
+    ],
+    image: { src: helpShot("r8-credit-bar"), alt: "The graduation credit bar" },
+    tourStep: "student-records",
+  },
+  {
+    id: "parent-report-pdf",
+    title: "Where do parents download a report card?",
+    category: "Parents",
+    keywords: ["parent", "portal", "report card", "transcript", "download", "pdf"],
+    body: [
+      "On the Parent Portal home page, the Report card and transcript (PDF) box lets parents pick a semester or the full year and download a progress report. High school families also get a Transcript button and the credit bar.",
+      "Parents can only download reports for their own students.",
+    ],
+    image: { src: helpShot("r8-portal-reports"), alt: "Report downloads in the Parent Portal" },
+  },
+  {
+    id: "reorder-plan",
+    title: "How does the reorder plan work?",
+    category: "Shipping",
+    keywords: ["reorder", "low stock", "running out", "inventory", "forecast", "order more", "csv"],
+    body: [
+      "The Reorder soon box on Today and the Reorder plan on Inventory Pricing look ahead (60 days by default) and add up what will be needed: open pick lists, open store orders, and the PACEs and answer keys that each upcoming ship date will pull (3 per subject per box, or everything for Annual Ship).",
+      "Items with a stock count are flagged when that need is more than what's on hand, with the date they run out. Items with no stock count yet are listed too, marked not counted. Test accounts are left out.",
+      "Click Show only items to reorder to filter the list, or Reorder CSV to download it. Nothing is ordered automatically.",
+    ],
+    image: { src: helpShot("r8-reorder"), alt: "The reorder plan on Inventory Pricing" },
+    tourStep: "reorder-plan",
+  },
+  {
+    id: "sms-texts",
+    title: "How do the text messages work?",
+    category: "Settings",
+    keywords: ["text", "sms", "webhook", "gm baptist", "automation", "box shipped", "overdue", "send test"],
+    body: [
+      "Settings has a Text messages section with two events: Test upload overdue and Box shipped. Each has its own webhook URL, its own On/Off switch, and a Send test button. The site sends the details to that URL, and an automation in GM Baptist software sends the text.",
+      "What's sent: the event, parent first and last name, phone, email, student name, a short message, the tracking link (box shipped), and the family ID. Send test uses test-account data and is marked as a test.",
+      "Both switches start Off. Turn one on only after its automation is ready. Test accounts never trigger a real text, and Recent texts shows what was sent.",
+    ],
+    image: { src: helpShot("r8-sms"), alt: "Text messages in Settings" },
+    tourStep: "sms-webhooks",
+  },
+  {
+    id: "school-numbers",
+    title: "How do I change the credits required or the reorder look-ahead?",
+    category: "Settings",
+    keywords: ["25 credits", "credits required", "look-ahead", "reorder days", "settings"],
+    body: [
+      "In Settings, under Graduation and reorder numbers, change Credits required to graduate (25) or Reorder look-ahead (60 days) and click Save.",
+    ],
   },
   {
     id: "payment-mode",
@@ -1072,9 +1169,11 @@ export function AdminDashboard() {
   const [recent, setRecent] = useState<RecentEnrollment[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadedAt, setLoadedAt] = useState<Date | null>(null);
+  const [reorderRows, setReorderRows] = useState<ReorderRow[] | null>(null);
 
   const load = async () => {
     setLoading(true);
+    loadReorderForecast().then(({ rows }) => setReorderRows(rows.filter((row) => row.shortfall > 0)));
     const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const head = { count: "exact" as const, head: true };
     const [testsToReview, pickListsReady, pickListsPaused, upcomingShipments, backorders, newEnrollments, ordersToFulfill, recentRows] =
@@ -1195,6 +1294,19 @@ export function AdminDashboard() {
       to: `${ADMIN_ROUTE}/orders`,
       tour: "admin-dash-orders",
     },
+    {
+      key: "reorder",
+      label: "Reorder soon",
+      value: reorderRows == null ? undefined : reorderRows.filter((row) => row.tracked).length,
+      note:
+        reorderRows == null
+          ? "Checking upcoming shipments..."
+          : `Counted items that run short in the next ${reorderRows[0]?.horizon_days ?? 60} days · ${
+              reorderRows.filter((row) => !row.tracked).length
+            } needed with no stock count`,
+      to: `${ADMIN_ROUTE}/inventory?reorder=1`,
+      tour: "admin-dash-reorder",
+    },
   ];
 
   return (
@@ -1246,6 +1358,36 @@ export function AdminDashboard() {
           );
         })}
       </div>
+
+      {reorderRows && reorderRows.length > 0 && (
+        <section className="rounded-xl border border-border/60 p-4 space-y-2" data-marker="MCA_R8_REORDER_CARD">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="font-serif text-lg font-bold text-primary">Reorder plan</h3>
+            <Link to={`${ADMIN_ROUTE}/inventory?reorder=1`} className="text-sm text-primary hover:underline">
+              See all in Inventory
+            </Link>
+          </div>
+          <ul className="divide-y divide-border/50 text-sm">
+            {reorderRows.slice(0, 6).map((row) => (
+              <li key={row.item_id} className="flex flex-wrap justify-between gap-2 py-2">
+                <span>
+                  {row.item_name}
+                  {!row.tracked && (
+                    <span className="ml-2 rounded bg-secondary px-1.5 py-0.5 text-[11px] text-foreground/60">no stock count</span>
+                  )}
+                </span>
+                <span className="text-foreground/70">
+                  {row.tracked ? `${row.on_hand ?? 0} on hand · ` : ""}need {row.total_demand} · short {row.shortfall}
+                  {row.first_short_date ? ` by ${formatShortDate(row.first_short_date)}` : ""}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {reorderRows.length > 6 && (
+            <p className="text-xs text-foreground/60">{reorderRows.length - 6} more in Inventory.</p>
+          )}
+        </section>
+      )}
 
       <section className="rounded-xl border border-border/60 p-4 space-y-2">
         <div className="flex items-center justify-between gap-2">

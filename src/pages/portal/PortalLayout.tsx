@@ -417,6 +417,14 @@ export function portalTourSteps(showProjection: boolean): SpotlightStep[] {
         "For high school students, this shows finished courses, current courses, and the credits still needed to graduate. You can print it for your records.",
       target: ["portal-nav-projection"],
     });
+    steps.push({
+      id: "credits",
+      title: "Credits toward graduation",
+      body:
+        "This bar shows credits earned, courses in progress, and what's still needed to graduate. Click Show what's still needed to see it by subject.",
+      route: PORTAL_ROUTE,
+      target: ["portal-home-grad-credits", "portal-nav-projection"],
+    });
   }
   steps.push(
     {
@@ -432,6 +440,14 @@ export function portalTourSteps(showProjection: boolean): SpotlightStep[] {
       body:
         "These show your student's courses and scores in a printable report. Open either one any time you need a copy.",
       target: ["portal-nav-reports"],
+    },
+    {
+      id: "report-downloads",
+      title: "Download a report card",
+      body:
+        "Pick a semester or the full year and download a progress report PDF with your student's PACEs and test scores. High school students also have a Transcript button.",
+      route: PORTAL_ROUTE,
+      target: ["portal-report-downloads"],
     },
     {
       id: "forms",

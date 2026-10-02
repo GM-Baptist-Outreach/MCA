@@ -520,6 +520,39 @@ function downloadCsv(filename: string, rows: (string | number)[][]) {
   URL.revokeObjectURL(url);
 }
 
+// ---------------------------------------------------------------------------
+// Round 8 (MCA_R8_REORDER): reorder plan from mca_reorder_forecast. Demand =
+// open pick lists + open store orders + PACEs (and answer keys) that upcoming
+// ship dates will pull, compared with the stock count. Read-only.
+// ---------------------------------------------------------------------------
+
+export interface ReorderRow {
+  item_id: string;
+  item_name: string;
+  sku: string | null;
+  item_type: string;
+  on_hand: number | null;
+  open_demand: number;
+  projected_demand: number;
+  total_demand: number;
+  shortfall: number;
+  first_short_date: string | null;
+  horizon_days: number;
+  tracked: boolean;
+}
+
+export async function loadReorderForecast(): Promise<{ rows: ReorderRow[]; error: string | null }> {
+  const { data, error } = await supabase.rpc("mca_reorder_forecast");
+  if (error) return { rows: [], error: error.message };
+  return { rows: (data ?? []) as ReorderRow[], error: null };
+}
+
+export function formatShortDate(iso: string | null): string {
+  if (!iso) return "—";
+  const [y, m, d] = iso.slice(0, 10).split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+}
+
 const emptyNewItem = {
   subject_id: "",
   original_name: "",
@@ -539,6 +572,12 @@ export default function AdminInventory() {
   const [adminUserId, setAdminUserId] = useState<string | null>(null);
   const [locationId, setLocationId] = useState<string | null>(null);
 
+  const [reorder, setReorder] = useState<Map<string, ReorderRow>>(new Map());
+  const [reorderHorizon, setReorderHorizon] = useState<number | null>(null);
+  const [reorderError, setReorderError] = useState<string | null>(null);
+  const [reorderOnly, setReorderOnly] = useState(
+    () => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("reorder") === "1",
+  );
   const [search, setSearch] = useState("");
   const [subjectFilter, setSubjectFilter] = useState<string>("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
@@ -661,6 +700,7 @@ export default function AdminInventory() {
       if (subjectFilter !== "all" && item.subject_id !== subjectFilter)
         return false;
       if (typeFilter !== "all" && item.item_type !== typeFilter) return false;
+      if (reorderOnly && !((reorder.get(item.id)?.shortfall ?? 0) > 0)) return false;
       if (!q) return true;
       const haystack = [
         item.original_name,
@@ -674,11 +714,41 @@ export default function AdminInventory() {
         .toLowerCase();
       return haystack.includes(q);
     }).sort(compareInventoryItems);
-  }, [items, search, subjectFilter, typeFilter]);
+  }, [items, search, subjectFilter, typeFilter, reorderOnly, reorder]);
 
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
-  }, [search, subjectFilter, typeFilter]);
+  }, [search, subjectFilter, typeFilter, reorderOnly]);
+
+  useEffect(() => {
+    loadReorderForecast().then(({ rows, error: forecastError }) => {
+      setReorderError(forecastError);
+      setReorder(new Map(rows.map((row) => [row.item_id, row])));
+      setReorderHorizon(rows[0]?.horizon_days ?? null);
+    });
+  }, []);
+
+  const reorderRows = useMemo(() => [...reorder.values()].filter((row) => row.shortfall > 0), [reorder]);
+  const reorderTracked = reorderRows.filter((row) => row.tracked);
+  const reorderUncounted = reorderRows.filter((row) => !row.tracked);
+
+  function exportReorderCsv() {
+    downloadCsv(`mca-reorder-${new Date().toISOString().slice(0, 10)}.csv`, [
+      ["Item", "SKU", "Type", "On hand", "Open lists/orders", "Upcoming shipments", "Total needed", "Short by", "Runs out", "Stock counted"],
+      ...reorderRows.map((row) => [
+        row.item_name,
+        row.sku ?? "",
+        row.item_type,
+        row.on_hand ?? "",
+        row.open_demand,
+        row.projected_demand,
+        row.total_demand,
+        row.shortfall,
+        row.first_short_date ?? "",
+        row.tracked ? "yes" : "no",
+      ]),
+    ]);
+  }
 
   const visibleItems = filteredItems.slice(0, visibleCount);
 
@@ -1288,6 +1358,41 @@ export default function AdminInventory() {
         </Select>
       </div>
 
+      <section
+        className={`rounded-lg border p-4 space-y-2 ${reorderTracked.length > 0 ? "border-amber-500/50 bg-amber-500/5" : ""}`}
+        data-tour="admin-reorder-plan"
+        data-marker="MCA_R8_REORDER"
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="font-medium">Reorder plan{reorderHorizon ? ` (next ${reorderHorizon} days)` : ""}</h2>
+            <p className="text-sm text-foreground/70">
+              {reorderError
+                ? `Couldn't load the reorder plan: ${reorderError}`
+                : `${reorderTracked.length} counted item${reorderTracked.length === 1 ? "" : "s"} will run short. ${reorderUncounted.length} item${reorderUncounted.length === 1 ? " is" : "s are"} needed but ${reorderUncounted.length === 1 ? "has" : "have"} no stock count yet.`}
+            </p>
+            <p className="text-xs text-foreground/60">
+              Counts open pick lists, open store orders, and the PACEs and answer keys that upcoming ship dates will
+              pull (3 per subject per box; Annual Ship takes all). Test accounts are left out. Change the look-ahead in Settings.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant={reorderOnly ? "default" : "outline"}
+              onClick={() => setReorderOnly((v) => !v)}
+              data-testid="reorder-only-toggle"
+            >
+              {reorderOnly ? "Show all items" : "Show only items to reorder"}
+            </Button>
+            <Button size="sm" variant="outline" onClick={exportReorderCsv} disabled={reorderRows.length === 0}>
+              <Download className="h-4 w-4 mr-1.5" />
+              Reorder CSV
+            </Button>
+          </div>
+        </div>
+      </section>
+
       <div className="rounded-lg border overflow-x-auto">
         <Table>
           <TableHeader>
@@ -1323,6 +1428,17 @@ export default function AdminInventory() {
               >
                 <TableCell className="font-medium">
                   {item.original_name}
+                  {(reorder.get(item.id)?.shortfall ?? 0) > 0 && (
+                    <span
+                      className="ml-2 inline-block rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-800"
+                      title={`Needed ${reorder.get(item.id)!.total_demand} in the next ${reorder.get(item.id)!.horizon_days} days`}
+                      data-testid="reorder-badge"
+                    >
+                      {reorder.get(item.id)!.tracked
+                        ? `Reorder ${reorder.get(item.id)!.shortfall} by ${formatShortDate(reorder.get(item.id)!.first_short_date)}`
+                        : `Need ${reorder.get(item.id)!.shortfall} · not counted`}
+                    </span>
+                  )}
                 </TableCell>
                 <TableCell>{item.subjects?.name ?? "—"}</TableCell>
                 <TableCell className="capitalize">{item.item_type}</TableCell>

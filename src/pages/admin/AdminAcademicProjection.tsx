@@ -5,8 +5,16 @@ import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ArrowDown, ArrowLeft, ArrowUp, Plus, Printer, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowUp, Download, Plus, Printer, Trash2 } from "lucide-react";
 import type { PortalContext } from "../portal/PortalLayout";
+import {
+  currentReportPeriod,
+  currentSchoolYear,
+  graduationProgress,
+  REPORT_PERIODS,
+  type GraduationProgress,
+  type ReportPeriod,
+} from "@/lib/loggedCourses";
 
 // Round 3 markers (grep the live bundle for these):
 export const MCA_R3_P1_MARKER = "MCA_R3_P1_PORTAL_PROJECTION";
@@ -485,6 +493,16 @@ export function AcademicProjectionView({
         </p>
       )}
 
+      <GraduationCreditTracker
+        key={[
+          ...completions.map((c) => `${c.id}:${c.credit_earned}:${c.final_average ?? ""}:${c.is_transfer ? 1 : 0}:${c.fulfills_requirement ?? ""}`),
+          ...requirements.map((r) => `${r.subject_name}:${r.credit_required}`),
+        ].join("|")}
+        studentId={studentId}
+        tourId={readOnly ? "portal-grad-credits" : "admin-grad-credits"}
+      />
+      <StudentRecordsDownloads studentId={studentId} highSchool />
+
       {!readOnly && showTemplateEditor && (
         <div className="rounded-xl border border-border/50 bg-secondary/30 p-5 space-y-3">
           <h3 className="font-semibold text-foreground">MCA Requirement Template (shared, all students)</h3>
@@ -782,4 +800,282 @@ export function PortalAcademicProjection() {
     return <p className="text-foreground/60">Select a student above to see the academic projection.</p>;
   }
   return <AcademicProjectionView key={selectedStudent.id} studentId={selectedStudent.id} readOnly />;
+}
+
+// ---------------------------------------------------------------------------
+// Round 8 (MCA_R8_STUDENT_RECORDS): one-click PDF downloads and the graduation
+// credit tracker. Shared by the parent portal and the admin student card.
+// PDFs are built by the student-records-pdf edge function from the database,
+// so the numbers match these screens.
+// ---------------------------------------------------------------------------
+
+export const MCA_R8_STUDENT_RECORDS = "MCA_R8_STUDENT_RECORDS";
+const RECORDS_FUNCTION_URL = "https://proiyioqfbjcmprsnqhf.supabase.co/functions/v1/student-records-pdf";
+
+export async function downloadStudentPdf(body: {
+  kind: "progress" | "transcript";
+  student_id: string;
+  school_year?: string;
+  period?: ReportPeriod;
+}): Promise<string> {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const token = sessionData.session?.access_token;
+  if (!token) throw new Error("Please sign in again.");
+  const res = await fetch(RECORDS_FUNCTION_URL, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Download failed (${res.status})`);
+  }
+  const disposition = res.headers.get("content-disposition") ?? "";
+  const match = disposition.match(/filename="([^"]+)"/);
+  const filename = match?.[1] ?? (body.kind === "transcript" ? "transcript.pdf" : "progress-report.pdf");
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  return filename;
+}
+
+function previousSchoolYear(year: string): string {
+  const start = Number(year.slice(0, 4)) - 1;
+  return `${start}-${String(start + 1).slice(-2)}`;
+}
+
+/** Semester / year picker plus the progress report and transcript buttons. */
+export function StudentRecordsDownloads({
+  studentId,
+  highSchool,
+  tourId,
+  compact = false,
+}: {
+  studentId: string;
+  highSchool: boolean;
+  tourId?: string;
+  compact?: boolean;
+}) {
+  const { toast } = useToast();
+  const thisYear = currentSchoolYear();
+  const [schoolYear, setSchoolYear] = useState(thisYear);
+  const [period, setPeriod] = useState<ReportPeriod>(currentReportPeriod());
+  const [busy, setBusy] = useState<"progress" | "transcript" | null>(null);
+
+  const run = async (kind: "progress" | "transcript") => {
+    setBusy(kind);
+    try {
+      const filename = await downloadStudentPdf(
+        kind === "progress"
+          ? { kind, student_id: studentId, school_year: schoolYear, period }
+          : { kind, student_id: studentId },
+      );
+      toast({ title: "Downloaded", description: filename });
+    } catch (err) {
+      toast({ title: "Couldn't download", description: (err as Error).message, variant: "destructive" });
+    }
+    setBusy(null);
+  };
+
+  const selectClass = "h-9 rounded-md border border-input bg-background px-2 text-sm";
+  return (
+    <div
+      className={compact ? "space-y-2" : "rounded-xl border border-border/50 bg-secondary/30 p-5 space-y-3"}
+      data-tour={tourId}
+      data-marker={MCA_R8_STUDENT_RECORDS}
+    >
+      {!compact && (
+        <div>
+          <h3 className="font-semibold text-foreground">Report card and transcript (PDF)</h3>
+          <p className="text-xs text-foreground/60">
+            Pick a semester or the full year, then download. The PDF has the MCA logo, PACEs completed, test
+            scores{highSchool ? ", and credits toward graduation" : ""}.
+          </p>
+        </div>
+      )}
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="text-xs text-foreground/60 space-y-1">
+          <span className="block">School year</span>
+          <select
+            className={selectClass}
+            value={schoolYear}
+            onChange={(e) => setSchoolYear(e.target.value)}
+            aria-label="School year"
+          >
+            {[thisYear, previousSchoolYear(thisYear)].map((y) => (
+              <option key={y} value={y}>
+                {y}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="text-xs text-foreground/60 space-y-1">
+          <span className="block">Period</span>
+          <select
+            className={selectClass}
+            value={period}
+            onChange={(e) => setPeriod(e.target.value as ReportPeriod)}
+            aria-label="Report period"
+          >
+            {REPORT_PERIODS.map((p) => (
+              <option key={p.key} value={p.key}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <Button size="sm" disabled={busy !== null} onClick={() => run("progress")} data-testid="download-progress-report">
+          <Download className="h-4 w-4 mr-1.5" />
+          {busy === "progress" ? "Building..." : "Progress report"}
+        </Button>
+        {highSchool && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy !== null}
+            onClick={() => run("transcript")}
+            data-testid="download-transcript"
+          >
+            <Download className="h-4 w-4 mr-1.5" />
+            {busy === "transcript" ? "Building..." : "Transcript"}
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Loads one student's requirement list, completions and the school total. */
+export function useGraduationProgress(studentId: string | undefined): {
+  loading: boolean;
+  progress: GraduationProgress | null;
+} {
+  const [state, setState] = useState<{ loading: boolean; progress: GraduationProgress | null }>({
+    loading: true,
+    progress: null,
+  });
+  useEffect(() => {
+    if (!studentId) return;
+    let ignore = false;
+    const load = async () => {
+      const [completionsRes, templateRes, customRes, totalRes] = await Promise.all([
+        supabase
+          .from("course_completions")
+          .select("subject_name, credit_earned, final_average, is_transfer, fulfills_requirement")
+          .eq("student_id", studentId),
+        supabase.from("graduation_requirements").select("subject_name, credit_required, sort_order").order("sort_order"),
+        supabase
+          .from("student_graduation_requirements")
+          .select("subject_name, credit_required, sort_order")
+          .eq("student_id", studentId)
+          .order("sort_order"),
+        supabase.rpc("mca_graduation_total_credits"),
+      ]);
+      if (ignore) return;
+      const custom = customRes.data ?? [];
+      const requirements = custom.length > 0 ? custom : templateRes.data ?? [];
+      const total = totalRes.error ? 25 : Number(totalRes.data ?? 25);
+      setState({
+        loading: false,
+        progress: graduationProgress(requirements, completionsRes.data ?? [], total),
+      });
+    };
+    load();
+    return () => {
+      ignore = true;
+    };
+  }, [studentId]);
+  return state;
+}
+
+/** Earned / in progress / still needed bar toward the required credits. */
+export function GraduationCreditTracker({
+  studentId,
+  tourId,
+  compact = false,
+}: {
+  studentId: string;
+  tourId?: string;
+  compact?: boolean;
+}) {
+  const { loading, progress } = useGraduationProgress(studentId);
+  const [showNeeded, setShowNeeded] = useState(false);
+  if (loading || !progress) {
+    return <p className="text-xs text-foreground/50">Loading credits...</p>;
+  }
+  const p = progress;
+  const neededParts = [
+    ...p.remainingBySubject.map((r) => ({ label: r.subject, credits: r.credits })),
+    ...(p.electivesRemaining > 0 ? [{ label: "Electives", credits: p.electivesRemaining }] : []),
+  ];
+  return (
+    <div
+      className={compact ? "space-y-2" : "rounded-xl border border-border/50 bg-secondary/30 p-5 space-y-3"}
+      data-tour={tourId}
+      data-testid="grad-credit-tracker"
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className={compact ? "text-sm font-semibold text-foreground" : "font-semibold text-foreground"}>
+          Credits toward graduation
+        </h3>
+        <span className="text-sm text-foreground/70">
+          <strong className="text-primary">{p.earned.toFixed(2)}</strong> of {p.totalRequired.toFixed(0)} earned
+        </span>
+      </div>
+      <div
+        className="relative h-4 w-full overflow-hidden rounded-full bg-secondary border border-border/60"
+        role="progressbar"
+        aria-label="Credits toward graduation"
+        aria-valuemin={0}
+        aria-valuemax={p.totalRequired}
+        aria-valuenow={p.earned}
+      >
+        <div className="absolute inset-y-0 left-0 bg-emerald-600" style={{ width: `${p.earnedPercent}%` }} />
+        <div
+          className="absolute inset-y-0 bg-amber-400"
+          style={{ left: `${p.earnedPercent}%`, width: `${p.inProgressPercent}%` }}
+        />
+      </div>
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-foreground/70">
+        <span className="inline-flex items-center gap-1.5">
+          <span className="h-2.5 w-2.5 rounded-sm bg-emerald-600" /> Earned {p.earned.toFixed(2)}
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="h-2.5 w-2.5 rounded-sm bg-amber-400" /> In progress {p.inProgress.toFixed(2)}
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="h-2.5 w-2.5 rounded-sm bg-secondary border border-border" /> Still needed{" "}
+          {p.stillNeeded.toFixed(2)}
+        </span>
+      </div>
+      {neededParts.length > 0 && (
+        <div>
+          <button
+            type="button"
+            className="text-xs text-primary hover:underline"
+            onClick={() => setShowNeeded((v) => !v)}
+            aria-expanded={showNeeded}
+          >
+            {showNeeded ? "Hide" : "Show"} what's still needed by subject
+          </button>
+          {showNeeded && (
+            <ul className="mt-2 grid gap-x-4 gap-y-0.5 text-xs text-foreground/70 sm:grid-cols-2">
+              {neededParts.map((part) => (
+                <li key={part.label} className="flex justify-between gap-2 border-b border-border/30 py-0.5">
+                  <span>{part.label}</span>
+                  <span>{part.credits.toFixed(2)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
