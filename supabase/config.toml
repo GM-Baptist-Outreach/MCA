@@ -38,3 +38,12 @@ verify_jwt = true
 
 [functions.sms-webhooks]
 verify_jwt = true
+
+[functions.weekly-summary]
+verify_jwt = true
+
+[functions.portal-billing]
+verify_jwt = true
+
+[functions.portal-reenroll]
+verify_jwt = true

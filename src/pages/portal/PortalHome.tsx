@@ -25,6 +25,8 @@ import { Input } from "@/components/ui/input";
 import { currentSchoolYear, nextSchoolYear } from "@/lib/loggedCourses";
 import type { PortalContext } from "./PortalLayout";
 import { GraduationCreditTracker, StudentRecordsDownloads } from "../admin/AdminAcademicProjection";
+import { PaymentMethodsCard, StudentAtAGlance } from "./PortalHomeCards";
+import { ReEnrollCard } from "./PortalReenroll";
 
 const CANCEL_REASON_LABELS: Record<string, string> = {
   graduated: "Graduated",
@@ -47,6 +49,7 @@ interface Enrollment {
 
 interface OrderItemRow {
   quantity: number;
+  item_id: string | null;
   items: { original_name: string } | null;
 }
 
@@ -220,6 +223,7 @@ const PortalHome = () => {
   const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
+  const [stripeBalance, setStripeBalance] = useState<number | null>(null);
 
   const [cancelingEnrollment, setCancelingEnrollment] =
     useState<Enrollment | null>(null);
@@ -248,7 +252,7 @@ const PortalHome = () => {
         .select(
           `
             id, status, payment_status, total, created_at,
-            order_items ( quantity, items ( original_name ) )
+            order_items ( quantity, item_id, items ( original_name ) )
           `,
         )
         .eq("family_id", family.id)
@@ -328,6 +332,18 @@ const PortalHome = () => {
         </h2>
         <p className="text-sm text-foreground/60">{family.email}</p>
       </div>
+
+      {/* Round 10 (MCA_R10_DASHBOARD): one-glance summary per student. */}
+      {selectedStudent && (
+        <StudentAtAGlance
+          key={`glance-${selectedStudent.id}`}
+          studentId={selectedStudent.id}
+          studentName={selectedStudent.student_name}
+          stripeBalance={stripeBalance}
+          tourId="portal-at-a-glance"
+        />
+      )}
+      <ReEnrollCard tourId="portal-reenroll" />
 
       {selectedStudent && selectedEnrollment?.status === "active" && (
         <StartSchoolYearCard
@@ -421,6 +437,8 @@ const PortalHome = () => {
         />
       )}
 
+      <PaymentMethodsCard onBalance={setStripeBalance} tourId="portal-payment-methods" />
+
       <div>
         <h3 className="font-semibold text-foreground mb-3">Order History</h3>
         {orders.length === 0 ? (
@@ -446,9 +464,22 @@ const PortalHome = () => {
                     .filter(Boolean)
                     .join(", ")}
                 </p>
-                <p className="font-semibold text-primary mt-1">
-                  ${order.total.toFixed(2)}
-                </p>
+                <div className="flex items-center justify-between mt-1 gap-2">
+                  <p className="font-semibold text-primary">
+                    ${order.total.toFixed(2)}
+                  </p>
+                  {order.order_items.some((oi) => oi.item_id) && (
+                    <Button size="sm" variant="outline" asChild data-testid="reorder-button">
+                      <Link
+                        to={`/store?add=${Array.from(
+                          new Set(order.order_items.map((oi) => oi.item_id).filter(Boolean)),
+                        ).join(",")}`}
+                      >
+                        Reorder
+                      </Link>
+                    </Button>
+                  )}
+                </div>
               </div>
             ))}
           </div>

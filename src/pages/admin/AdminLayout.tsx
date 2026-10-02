@@ -126,9 +126,17 @@ export function adminTourSteps(familyId: string | null): SpotlightStep[] {
       id: "test-reviews",
       title: "Test Reviews",
       body:
-        "Tests that parents upload land here, and the menu shows how many are waiting. Check the photos and score, then approve or reject with a note. Approved scores fill in the student's PACEs.",
+        "Tests that parents upload land here, and the menu shows how many are waiting. Click Score to open the photos with a score box beside them: saving fills in the student's PACE, re-checks the next shipment, and approves the upload in one step.",
       route: `${ADMIN_ROUTE}/test-reviews`,
       target: ["admin-test-reviews"],
+    },
+    {
+      id: "reenrollment",
+      title: "Re-enrollment",
+      body:
+        "Each spring, open re-enrollment here and set the dates. Families confirm next year from their portal with their info filled in and pay if needed. This page shows who has confirmed, paid, or isn't returning.",
+      route: `${ADMIN_ROUTE}/reenrollment`,
+      target: ["admin-reenrollment"],
     },
     {
       id: "pick-lists",
@@ -187,6 +195,14 @@ export function adminTourSteps(familyId: string | null): SpotlightStep[] {
       target: ["admin-email-switches"],
     },
     {
+      id: "weekly-summary",
+      title: "Weekly summary email",
+      body:
+        "Every Monday at 8 AM Eastern, a summary of the past week goes to the address here: new enrollments, overdue tests, low stock, boxes shipped, and money collected. Turn it off or send yourself a preview.",
+      route: `${ADMIN_ROUTE}/emails`,
+      target: ["admin-weekly-summary", "admin-email-switches"],
+    },
+    {
       id: "settings",
       title: "Settings and Payment Mode",
       body:
@@ -236,7 +252,7 @@ export interface AdminOutletContext {
 // ---------------------------------------------------------------------------
 
 const HELP_FILES_URL = `${SUPABASE_URL}/storage/v1/object/public/help-center`;
-const HELP_FILES_VERSION = "2026-10-02-r9";
+const HELP_FILES_VERSION = "2026-10-02-r10";
 export const GUIDE_PDF_URL = `${HELP_FILES_URL}/How-MCA-Works.pdf?v=${HELP_FILES_VERSION}`;
 
 const helpShot = (name: string) => `${HELP_FILES_URL}/shots/${name}.jpg?v=${HELP_FILES_VERSION}`;
@@ -286,7 +302,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
     category: "Getting around",
     keywords: ["menu", "sidebar", "navigation", "where", "moved", "phone", "hamburger", "backordered", "payment mode"],
     body: [
-      "The menu on the left is grouped. Today: the dashboard. Students: Families, Current Enrollments, Test Reviews (with a count of tests waiting). Shipping: Pick Lists and Store Orders. Store: Inventory Pricing and Subscription Plans. Settings: Email Templates, Admin Users, and Settings.",
+      "The menu on the left is grouped. Today: the dashboard. Students: Families, Current Enrollments, Test Reviews (with a count of tests waiting), and Re-enrollment. Shipping: Pick Lists and Store Orders. Store: Inventory Pricing and Subscription Plans. Settings: Email Templates, Admin Users, and Settings.",
       "A few things moved: Backordered is now a tab inside Pick Lists, Payment Mode is a section of the Settings page, and Enroll Without Payment is a button on the Families page. Help, Replay tour, and Log Out are at the bottom of the menu.",
       "On a phone, the menu is hidden behind the menu button (three lines) at the top left. Tap it to open the menu, and tap a page or outside the menu to close it.",
     ],
@@ -414,6 +430,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
     body: [
       "Every test a parent uploads shows up in Test Reviews, and the menu shows a count when some are waiting. Open one to see the photos and score, then approve or reject it with a note.",
       "Approved scores fill in the student's PACEs automatically. ACE remains the official grade record.",
+      "Faster: click Score on a row. The photos open with a score box beside them, already set to the PACE the parent picked. Check the score, tick Entered into ACE if you've done that, and click Save score & approve. See \"Scoring a test right in the photo viewer\" for the details.",
     ],
     image: { src: helpShot("r7-test-reviews"), alt: "Test Reviews" },
     tourStep: "test-reviews",
@@ -703,6 +720,88 @@ export const HELP_ARTICLES: HelpArticle[] = [
     body: [
       "Click Download the guide (PDF) at the top of this page for the latest How MCA Works guide, with screenshots of both the parent and admin sides.",
     ],
+  },
+  // ----- Round 10 (MCA_R10_HELP)
+  {
+    id: "parent-dashboard",
+    title: "What do parents see on their portal home?",
+    category: "Parents",
+    keywords: ["dashboard", "portal home", "at a glance", "current paces", "next shipment", "balance", "owed", "recent tests"],
+    body: [
+      "The top of the portal home is an At a glance card for the selected student: the PACEs they're working on now, what ships in the next box and when (or why it's paused), the last box's tracking link, the most recent test scores, and any balance owed.",
+      "High school students also get the 25-credit graduation bar further down. With more than one student, the Student menu at the top switches the card to that child.",
+      "Balance owed counts past-due tuition and unpaid store orders. If a payment failed, the parent can fix their card from the Saved card section on the same page.",
+    ],
+  },
+  {
+    id: "viewer-scoring",
+    title: "Scoring a test right in the photo viewer",
+    category: "Families",
+    keywords: ["score", "test reviews", "viewer", "photos", "approve", "enter score", "prescribe", "next pace"],
+    body: [
+      "In Test Reviews, click Score on any upload with photos. The photos open full size with a score box on the side. The PACE is filled in from the upload; change it if the parent picked the wrong one.",
+      "Type the score (for example 94) and click Save score & approve. In one step it records the score on the student's PACE, approves the upload, adds the next PACE to the upcoming box if one is now needed, and checks whether the student just finished a level.",
+      "A score under 80 is saved as not passed, and a Re-issue button appears so you can send the same PACE again. Tick Entered into ACE once you've put the score in ACE, which is still the official grade record.",
+    ],
+    tourStep: "test-reviews",
+  },
+  {
+    id: "weekly-summary",
+    title: "The Monday weekly summary email",
+    category: "Automatic jobs",
+    keywords: ["weekly", "summary", "monday", "report", "enrollments", "overdue", "low stock", "shipped", "money", "collected"],
+    body: [
+      "Every Monday at 8 AM Eastern (7 AM in winter), one email covers the past 7 days: new enrollments, tests that are overdue, items that are low or need reordering soon, boxes shipped, and money collected through Stripe.",
+      "It goes only to the address on Email Templates (David by default). Families never get it. The switch there turns it off, and Send me a preview emails the current numbers to you, the signed-in admin.",
+      "Each send (or skip) is listed under Recent summaries.",
+    ],
+    tourStep: "weekly-summary",
+  },
+  {
+    id: "diploma",
+    title: "How do I print a diploma?",
+    category: "Families",
+    keywords: ["diploma", "graduation", "graduate", "transcript", "credits", "senior", "high school", "pdf"],
+    body: [
+      "When a high school student has earned the credits needed to graduate (25 by default, set on Settings), a Diploma button appears next to the Transcript button on their student card and in the parent's portal. One click downloads a printable diploma PDF.",
+      "Before then, admins see a Diploma sample button that downloads a watermarked preview, and parents see a note that the diploma unlocks when the credits are complete.",
+      "Pair it with the official Transcript button for college or job applications.",
+    ],
+    tourStep: "student-records",
+  },
+  {
+    id: "saved-cards",
+    title: "Saved cards and autopay",
+    category: "Parents",
+    keywords: ["card", "saved card", "autopay", "payment method", "update card", "stripe", "declined", "reorder"],
+    body: [
+      "Parents can save a card from the Saved card and autopay section of their portal home. Stripe stores the card securely; MCA never sees the full number.",
+      "The default card is used for tuition autopay (monthly or annual) and is offered at the store checkout when the parent is signed in. Parents can add another card, make it the default, or remove one.",
+      "Order history in the portal has a Reorder button that puts the same items back in the store cart.",
+    ],
+  },
+  {
+    id: "celebrations",
+    title: "Celebration screens and emails",
+    category: "Emails",
+    keywords: ["celebration", "congratulations", "level", "finished", "school year", "milestone", "confetti"],
+    body: [
+      "When a scored test shows a student passed the last PACE of a level in a subject, or every PACE prescribed for the school year, the parent sees a congratulations screen the next time they open the portal.",
+      "A congratulations email goes out too, unless Celebration emails is turned off on Email Templates. You can edit its wording there like any other template. Test accounts never get it.",
+    ],
+    tourStep: "emails",
+  },
+  {
+    id: "reenrollment",
+    title: "How does spring re-enrollment work?",
+    category: "Families",
+    keywords: ["re-enroll", "reenroll", "renew", "next year", "spring", "confirm", "returning", "window"],
+    body: [
+      "Open Re-enrollment in the menu, set the school year (like 2027-28) and the dates, turn on Re-enrollment is open, and Save. During the window, families see a Re-enroll card on their portal home.",
+      "Their name, phone, and address are filled in. They pick each student's grade and plan (or say a student isn't returning) and confirm. Students on autopay simply keep renewing. Anyone without a card on file gets a secure Stripe payment page.",
+      "The Re-enrollment page lists every student with their status: not confirmed, confirmed, waiting on payment, paid, or not returning. Download CSV gives you the list for follow-up calls. Turn the switch off to close it.",
+    ],
+    tourStep: "reenrollment",
   },
 ];
 
@@ -1454,6 +1553,7 @@ function adminNavGroups(pendingReviews: number): Array<{ title: string; tour: st
         { to: `${ADMIN_ROUTE}/families`, label: "Families" },
         { to: `${ADMIN_ROUTE}/enrollments`, label: "Current Enrollments" },
         { to: `${ADMIN_ROUTE}/test-reviews`, label: "Test Reviews", badge: pendingReviews },
+        { to: `${ADMIN_ROUTE}/reenrollment`, label: "Re-enrollment" },
       ],
     },
     {
