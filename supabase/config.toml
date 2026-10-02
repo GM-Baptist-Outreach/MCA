@@ -32,3 +32,9 @@ verify_jwt = true
 
 [functions.submit-website-form]
 verify_jwt = false
+
+[functions.student-records-pdf]
+verify_jwt = true
+
+[functions.sms-webhooks]
+verify_jwt = true

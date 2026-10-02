@@ -30,6 +30,7 @@ import {
   FileText,
   GraduationCap,
 } from "lucide-react";
+import { GraduationCreditTracker, StudentRecordsDownloads } from "./AdminAcademicProjection";
 
 interface Family {
   id: string;
@@ -1158,6 +1159,24 @@ const AdminFamilyDetail = () => {
                   Projection
                 </Link>
               </div>
+            </div>
+
+            {/* Round 8: PDF downloads and credit bar (same as the parent portal). */}
+            <div
+              className="rounded-lg border border-border/50 bg-background p-3 space-y-3"
+              data-tour={studentIndex === 0 ? "admin-student-records" : undefined}
+            >
+              <p className="text-xs uppercase tracking-wide text-foreground/50">
+                Reports
+              </p>
+              <StudentRecordsDownloads
+                studentId={student.id}
+                highSchool={student.enrollments.some((e) => e.tuition_tier === "high_school")}
+                compact
+              />
+              {student.enrollments.some((e) => e.tuition_tier === "high_school") && (
+                <GraduationCreditTracker studentId={student.id} compact />
+              )}
             </div>
 
             <div>

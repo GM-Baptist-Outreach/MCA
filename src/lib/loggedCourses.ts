@@ -982,3 +982,134 @@ export function buildCourseOptions(items: CourseCatalogItem[]): {
   );
   return { elementary, courses };
 }
+
+// ---------------------------------------------------------------------------
+// Round 8: graduation credit tracker and report-card semesters.
+// Marker: MCA_R8_GRAD_TRACKER. Also used by the student-records-pdf edge
+// function through a copy in supabase/functions/_shared/loggedCourses.ts
+// (a test keeps the two files identical).
+// ---------------------------------------------------------------------------
+
+export const DEFAULT_GRADUATION_TOTAL_CREDITS = 25;
+
+export interface GradCompletionLike {
+  subject_name: string;
+  credit_earned: number | string | null;
+  final_average: number | string | null;
+  is_transfer: boolean | null;
+  fulfills_requirement?: string | null;
+}
+
+export interface GradRequirementLike {
+  subject_name: string;
+  credit_required: number | string;
+}
+
+export interface GraduationProgress {
+  totalRequired: number;
+  earned: number;
+  inProgress: number;
+  stillNeeded: number;
+  earnedPercent: number;
+  inProgressPercent: number;
+  requirementsTotal: number;
+  electivesRequired: number;
+  electivesRemaining: number;
+  remainingBySubject: Array<{ subject: string; credits: number }>;
+}
+
+function gradNorm(name: string | null | undefined): string {
+  return (name ?? "").trim().toLowerCase();
+}
+
+/** Completed = transfer credit or a final average logged (same as the projection page). */
+export function isCompletionDone(c: GradCompletionLike): boolean {
+  return c.is_transfer === true || (c.final_average != null && c.final_average !== "");
+}
+
+/**
+ * Credits earned / in progress / still needed toward graduation.
+ * Required total = the larger of the school setting (25) and the requirement list.
+ * Credits that don't match a required course (or go past it) count as electives.
+ */
+export function graduationProgress(
+  requirements: GradRequirementLike[],
+  completions: GradCompletionLike[],
+  totalSetting: number | null | undefined = DEFAULT_GRADUATION_TOTAL_CREDITS,
+): GraduationProgress {
+  const round = (n: number) => Math.round(n * 100) / 100;
+  const credit = (v: number | string | null) => {
+    const n = Number(v ?? 0);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const requirementsTotal = requirements.reduce((sum, r) => sum + credit(r.credit_required), 0);
+  const setting = Number(totalSetting);
+  const totalRequired = Math.max(
+    Number.isFinite(setting) && setting > 0 ? setting : DEFAULT_GRADUATION_TOTAL_CREDITS,
+    requirementsTotal,
+  );
+  const earned = completions.filter(isCompletionDone).reduce((s, c) => s + credit(c.credit_earned), 0);
+  const inProgress = completions
+    .filter((c) => !isCompletionDone(c))
+    .reduce((s, c) => s + credit(c.credit_earned), 0);
+
+  const keys = new Set(requirements.map((r) => gradNorm(r.subject_name)));
+  let electiveCredits = completions
+    .filter((c) => !keys.has(gradNorm(c.fulfills_requirement || c.subject_name)))
+    .reduce((s, c) => s + credit(c.credit_earned), 0);
+  const remainingBySubject: Array<{ subject: string; credits: number }> = [];
+  for (const r of requirements) {
+    const key = gradNorm(r.subject_name);
+    const covered = completions
+      .filter((c) => gradNorm(c.fulfills_requirement || c.subject_name) === key)
+      .reduce((s, c) => s + credit(c.credit_earned), 0);
+    const need = credit(r.credit_required);
+    if (covered > need) electiveCredits += covered - need;
+    const left = need - covered;
+    if (left > 0.001) remainingBySubject.push({ subject: r.subject_name, credits: round(left) });
+  }
+  const electivesRequired = Math.max(0, totalRequired - requirementsTotal);
+  const electivesRemaining = Math.max(0, electivesRequired - electiveCredits);
+  const stillNeeded = Math.max(0, totalRequired - earned - inProgress);
+  const pct = (n: number) => (totalRequired > 0 ? Math.min(100, (n / totalRequired) * 100) : 0);
+  const earnedPercent = pct(earned);
+  return {
+    totalRequired: round(totalRequired),
+    earned: round(earned),
+    inProgress: round(inProgress),
+    stillNeeded: round(stillNeeded),
+    earnedPercent,
+    inProgressPercent: Math.min(100 - earnedPercent, pct(inProgress)),
+    requirementsTotal: round(requirementsTotal),
+    electivesRequired: round(electivesRequired),
+    electivesRemaining: round(electivesRemaining),
+    remainingBySubject,
+  };
+}
+
+export type ReportPeriod = "S1" | "S2" | "year";
+
+export const REPORT_PERIODS: Array<{ key: ReportPeriod; label: string }> = [
+  { key: "S1", label: "1st semester (Q1-Q2)" },
+  { key: "S2", label: "2nd semester (Q3-Q4)" },
+  { key: "year", label: "Full school year" },
+];
+
+/** Semester 1 = Q1+Q2, semester 2 = Q3+Q4, using the report-card quarters above. */
+export function isInReportPeriod(
+  completedAt: string | null | undefined,
+  schoolYear: string,
+  startDate: string | null | undefined,
+  period: ReportPeriod,
+): boolean {
+  const quarter = quarterForCompletedAt(completedAt, schoolYear, startDate);
+  if (!quarter) return false;
+  if (period === "year") return true;
+  return period === "S1" ? quarter === "Q1" || quarter === "Q2" : quarter === "Q3" || quarter === "Q4";
+}
+
+/** Default period for "today": semester 1 from July through December. */
+export function currentReportPeriod(date = new Date()): ReportPeriod {
+  const month = date.getMonth() + 1;
+  return month >= 7 ? "S1" : "S2";
+}

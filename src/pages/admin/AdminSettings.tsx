@@ -485,6 +485,370 @@ export function AdminEmailTemplates() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// MCA_R8_SMS_WEBHOOKS: one webhook per text-message event. Each URL is an
+// automation in GM Baptist software, which sends the actual text. The
+// sms-webhooks edge function posts to the URL; switches start Off.
+// ---------------------------------------------------------------------------
+
+type SmsEvent = "test_upload_overdue" | "box_shipped";
+
+const SMS_EVENTS: Array<{
+  event: SmsEvent;
+  label: string;
+  help: string;
+  urlKey: string;
+  enabledKey: string;
+}> = [
+  {
+    event: "test_upload_overdue",
+    label: "Test upload overdue",
+    help: "Same rule as the overdue email: a PACE marked Issued 28+ days ago with no test uploaded (only PACEs issued after the emails went live). One text per student, each PACE once, at most once a week. Checked daily at 9:45 AM Eastern (8:45 AM in winter).",
+    urlKey: "sms_webhook_url_overdue",
+    enabledKey: "sms_webhook_enabled_overdue",
+  },
+  {
+    event: "box_shipped",
+    label: "Box shipped",
+    help: "When a pick list is marked Shipped, or a ship-to-home store order is marked Fulfilled. Includes the tracking link. Checked every 5 minutes. Only shipments after you turn this on count.",
+    urlKey: "sms_webhook_url_shipped",
+    enabledKey: "sms_webhook_enabled_shipped",
+  },
+];
+
+interface SmsLogRow {
+  id: string;
+  event: string;
+  status: string;
+  detail: string | null;
+  http_status: number | null;
+  is_test: boolean;
+  created_at: string;
+  students: { student_name: string } | { student_name: string }[] | null;
+}
+
+async function callSmsWebhooks(body: Record<string, unknown>) {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const token = sessionData.session?.access_token;
+  if (!token) throw new Error("Sign in again first.");
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/sms-webhooks`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) throw new Error(data.error || `Request failed (${res.status})`);
+  return data;
+}
+
+export function SmsWebhooks() {
+  const { toast } = useToast();
+  const [urls, setUrls] = useState<Record<string, string>>({});
+  const [saved, setSaved] = useState<Record<string, string>>({});
+  const [enabled, setEnabled] = useState<Record<string, boolean>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const [results, setResults] = useState<Record<string, string>>({});
+  const [log, setLog] = useState<SmsLogRow[]>([]);
+  const [overdueCheck, setOverdueCheck] = useState<string | null>(null);
+
+  const load = async () => {
+    try {
+      await loadInner();
+    } catch (err) {
+      console.error("Couldn't load text message settings", err);
+    }
+  };
+
+  const loadInner = async () => {
+    const keys = SMS_EVENTS.flatMap((e) => [e.urlKey, e.enabledKey]);
+    const [settingsRes, logRes] = await Promise.all([
+      supabase.from("app_settings").select("key, value").in("key", keys),
+      supabase
+        .from("sms_webhook_log")
+        .select("id, event, status, detail, http_status, is_test, created_at, students(student_name)")
+        .order("created_at", { ascending: false })
+        .limit(10),
+    ]);
+    const rows = settingsRes.data ?? [];
+    const nextUrls: Record<string, string> = {};
+    const nextEnabled: Record<string, boolean> = {};
+    for (const e of SMS_EVENTS) {
+      nextUrls[e.event] = rows.find((r) => r.key === e.urlKey)?.value ?? "";
+      nextEnabled[e.event] = rows.find((r) => r.key === e.enabledKey)?.value === "true";
+    }
+    setUrls(nextUrls);
+    setSaved(nextUrls);
+    setEnabled(nextEnabled);
+    setLog((logRes.data ?? []) as SmsLogRow[]);
+  };
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const saveUrl = async (e: (typeof SMS_EVENTS)[number]) => {
+    const value = (urls[e.event] ?? "").trim();
+    if (value && !/^https:\/\/\S+$/i.test(value)) {
+      toast({ title: "Check the URL", description: "It should start with https://", variant: "destructive" });
+      return;
+    }
+    setBusy(`url:${e.event}`);
+    const { error } = await supabase
+      .from("app_settings")
+      .upsert({ key: e.urlKey, value, updated_at: new Date().toISOString() }, { onConflict: "key" });
+    setBusy(null);
+    if (error) {
+      toast({ title: "Couldn't save", description: error.message, variant: "destructive" });
+      return;
+    }
+    setSaved((prev) => ({ ...prev, [e.event]: value }));
+    toast({ title: "Webhook URL saved" });
+  };
+
+  const toggle = async (e: (typeof SMS_EVENTS)[number], on: boolean) => {
+    if (on && !(saved[e.event] ?? "").trim()) {
+      toast({ title: "Save a webhook URL first", variant: "destructive" });
+      return;
+    }
+    setBusy(`on:${e.event}`);
+    const { error } = await supabase
+      .from("app_settings")
+      .upsert({ key: e.enabledKey, value: on ? "true" : "false", updated_at: new Date().toISOString() }, { onConflict: "key" });
+    setBusy(null);
+    if (error) {
+      toast({ title: "Couldn't save", description: error.message, variant: "destructive" });
+      return;
+    }
+    setEnabled((prev) => ({ ...prev, [e.event]: on }));
+    toast({ title: on ? `${e.label} texts turned on` : `${e.label} texts turned off` });
+  };
+
+  const sendTest = async (e: (typeof SMS_EVENTS)[number]) => {
+    if ((urls[e.event] ?? "").trim() !== (saved[e.event] ?? "").trim()) {
+      toast({ title: "Save the URL first", description: "Send test uses the saved URL.", variant: "destructive" });
+      return;
+    }
+    setBusy(`test:${e.event}`);
+    try {
+      const data = await callSmsWebhooks({ action: "send_test", event: e.event });
+      setResults((prev) => ({
+        ...prev,
+        [e.event]: data.sent
+          ? `Test sent (HTTP ${data.http_status}). It used test-account data and is marked "test": true.`
+          : `Test failed: ${data.detail ?? data.error ?? "unknown error"}`,
+      }));
+    } catch (err) {
+      setResults((prev) => ({ ...prev, [e.event]: `Test failed: ${(err as Error).message}` }));
+    }
+    setBusy(null);
+    load();
+  };
+
+  const checkOverdue = async () => {
+    setOverdueCheck("Checking...");
+    try {
+      const data = await callSmsWebhooks({ action: "overdue_scan", dry_run: true });
+      const students = (data.students ?? []) as Array<{ student: string; paces: string[]; skipped?: string }>;
+      const due = students.filter((s) => !s.skipped);
+      setOverdueCheck(
+        due.length === 0
+          ? `No students would get an overdue text right now (${students.length} skipped). Nothing was sent.`
+          : `${due.length} student${due.length === 1 ? "" : "s"} would get a text: ${due
+              .map((s) => `${s.student} (${s.paces.join(", ")})`)
+              .join("; ")}. Nothing was sent.`,
+      );
+    } catch (err) {
+      setOverdueCheck(`Check failed: ${(err as Error).message}`);
+    }
+  };
+
+  const studentOf = (row: SmsLogRow) =>
+    (Array.isArray(row.students) ? row.students[0] : row.students)?.student_name ?? "";
+
+  return (
+    <section
+      id="sms-texts"
+      className="space-y-4 rounded-xl border border-border/50 p-4"
+      data-marker="MCA_R8_SMS_WEBHOOKS"
+      data-tour="admin-sms-webhooks"
+    >
+      <div>
+        <h3 className="text-xl font-bold font-serif text-primary">Text messages (GM Baptist software)</h3>
+        <p className="text-sm text-foreground/70">
+          Each event sends its details to its own webhook URL. Set up one automation per URL in GM Baptist
+          software to send the text. The site sends: event, parent first and last name, phone, email, student
+          name, a short message, the tracking link (box shipped), and the family ID. Test accounts never trigger
+          a real text.
+        </p>
+      </div>
+      {SMS_EVENTS.map((e) => (
+        <div key={e.event} className="space-y-2 rounded-lg bg-secondary/30 p-3" data-testid={`sms-${e.event}`}>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <Label htmlFor={`sms-on-${e.event}`} className="font-medium">
+                {e.label}
+              </Label>
+              <p className="text-xs text-foreground/60">{e.help}</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-foreground/60 w-6">{enabled[e.event] ? "On" : "Off"}</span>
+              <Switch
+                id={`sms-on-${e.event}`}
+                checked={!!enabled[e.event]}
+                disabled={busy !== null}
+                onCheckedChange={(checked) => toggle(e, checked)}
+              />
+            </div>
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Input
+              className="bg-background h-9 text-xs"
+              placeholder="https://..."
+              aria-label={`${e.label} webhook URL`}
+              value={urls[e.event] ?? ""}
+              onChange={(ev) => setUrls((prev) => ({ ...prev, [e.event]: ev.target.value }))}
+            />
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={busy !== null || (urls[e.event] ?? "") === (saved[e.event] ?? "")}
+                onClick={() => saveUrl(e)}
+              >
+                Save URL
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={busy !== null || !(saved[e.event] ?? "").trim()}
+                onClick={() => sendTest(e)}
+              >
+                {busy === `test:${e.event}` ? "Sending..." : "Send test"}
+              </Button>
+            </div>
+          </div>
+          {results[e.event] && <p className="text-xs text-foreground/70">{results[e.event]}</p>}
+        </div>
+      ))}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="button" size="sm" variant="outline" onClick={checkOverdue}>
+          Check overdue texts now (sends nothing)
+        </Button>
+      </div>
+      {overdueCheck && <p className="text-xs text-foreground/70">{overdueCheck}</p>}
+      <div className="space-y-1">
+        <p className="text-xs uppercase tracking-wide text-foreground/50">Recent texts sent to GM Baptist software</p>
+        {log.length === 0 ? (
+          <p className="text-xs text-foreground/60">None yet.</p>
+        ) : (
+          <ul className="space-y-1 text-xs">
+            {log.map((row) => (
+              <li key={row.id} className="border-b border-border/40 py-1">
+                {new Date(row.created_at).toLocaleString()} · {row.event === "box_shipped" ? "Box shipped" : "Test overdue"}
+                {row.is_test ? " (test)" : ""}
+                {studentOf(row) ? ` · ${studentOf(row)}` : ""} · <span className="font-medium">{row.status}</span>
+                {row.detail ? ` (${row.detail})` : ""}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MCA_R8_SCHOOL_NUMBERS: graduation credits required and the reorder look-ahead.
+// ---------------------------------------------------------------------------
+
+const SCHOOL_NUMBERS: Array<{ key: string; label: string; help: string; fallback: string; min: number; max: number }> = [
+  {
+    key: "graduation_total_credits",
+    label: "Credits required to graduate",
+    help: "Used by the credit bar on the portal, the student card, and the PDFs. If a student's course list adds up to more, the larger number is used.",
+    fallback: "25",
+    min: 1,
+    max: 60,
+  },
+  {
+    key: "reorder_horizon_days",
+    label: "Reorder look-ahead (days)",
+    help: "How far ahead the Reorder card on Today looks at upcoming shipments.",
+    fallback: "60",
+    min: 7,
+    max: 365,
+  },
+];
+
+export function SchoolNumbers() {
+  const { toast } = useToast();
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState<string | null>(null);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const { data } = await supabase
+          .from("app_settings")
+          .select("key, value")
+          .in("key", SCHOOL_NUMBERS.map((n) => n.key));
+        const next: Record<string, string> = {};
+        for (const n of SCHOOL_NUMBERS) next[n.key] = data?.find((r) => r.key === n.key)?.value ?? n.fallback;
+        setValues(next);
+      } catch (err) {
+        console.error("Couldn't load school numbers", err);
+      }
+    };
+    load();
+  }, []);
+
+  const save = async (n: (typeof SCHOOL_NUMBERS)[number]) => {
+    const num = Number(values[n.key]);
+    if (!Number.isFinite(num) || num < n.min || num > n.max) {
+      toast({ title: `Enter a number from ${n.min} to ${n.max}`, variant: "destructive" });
+      return;
+    }
+    setSaving(n.key);
+    const { error } = await supabase
+      .from("app_settings")
+      .upsert({ key: n.key, value: String(num), updated_at: new Date().toISOString() }, { onConflict: "key" });
+    setSaving(null);
+    if (error) toast({ title: "Couldn't save", description: error.message, variant: "destructive" });
+    else toast({ title: "Saved" });
+  };
+
+  return (
+    <section className="space-y-3 rounded-xl border border-border/50 p-4" data-marker="MCA_R8_SCHOOL_NUMBERS" data-tour="admin-school-numbers">
+      <h3 className="text-xl font-bold font-serif text-primary">Graduation and reorder numbers</h3>
+      {SCHOOL_NUMBERS.map((n) => (
+        <div key={n.key} className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between rounded-lg bg-secondary/30 p-3">
+          <div className="space-y-1">
+            <Label htmlFor={`num-${n.key}`} className="font-medium">
+              {n.label}
+            </Label>
+            <p className="text-xs text-foreground/60">{n.help}</p>
+          </div>
+          <div className="flex gap-2">
+            <Input
+              id={`num-${n.key}`}
+              type="number"
+              className="bg-background h-9 w-24"
+              value={values[n.key] ?? ""}
+              onChange={(e) => setValues((prev) => ({ ...prev, [n.key]: e.target.value }))}
+            />
+            <Button type="button" size="sm" variant="outline" disabled={saving === n.key} onClick={() => save(n)}>
+              Save
+            </Button>
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
 const AdminSettings = () => {
   const { toast } = useToast();
   const [mode, setMode] = useState<PaymentMode>("live");
@@ -673,6 +1037,10 @@ const AdminSettings = () => {
         </Collapsible>
       </section>
       </div>
+
+      <SmsWebhooks />
+
+      <SchoolNumbers />
 
       <AlertDialog
         open={pendingMode !== null}

@@ -36,10 +36,18 @@ describe("Admin payment mode toggle", () => {
           }),
         };
       }
+      if (table === "sms_webhook_log") {
+        return {
+          select: () => ({
+            order: () => ({ limit: () => Promise.resolve({ data: [], error: null }) }),
+          }),
+        };
+      }
       expect(table).toBe("app_settings");
       return {
         select: () => ({
           eq: () => ({ maybeSingle: maybeSingleMock }),
+          in: () => Promise.resolve({ data: [], error: null }),
         }),
         upsert: upsertMock,
       };

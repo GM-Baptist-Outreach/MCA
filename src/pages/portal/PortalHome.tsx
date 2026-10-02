@@ -24,6 +24,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { currentSchoolYear, nextSchoolYear } from "@/lib/loggedCourses";
 import type { PortalContext } from "./PortalLayout";
+import { GraduationCreditTracker, StudentRecordsDownloads } from "../admin/AdminAcademicProjection";
 
 const CANCEL_REASON_LABELS: Record<string, string> = {
   graduated: "Graduated",
@@ -401,6 +402,23 @@ const PortalHome = () => {
             </div>
           )}
         </div>
+      )}
+
+      {/* Round 8: report card / transcript PDFs and the credit bar. */}
+      {selectedStudent && (
+        <StudentRecordsDownloads
+          key={`records-${selectedStudent.id}`}
+          studentId={selectedStudent.id}
+          highSchool={selectedEnrollment?.tuition_tier === "high_school"}
+          tourId="portal-report-downloads"
+        />
+      )}
+      {selectedStudent && selectedEnrollment?.tuition_tier === "high_school" && (
+        <GraduationCreditTracker
+          key={`credits-${selectedStudent.id}`}
+          studentId={selectedStudent.id}
+          tourId="portal-home-grad-credits"
+        />
       )}
 
       <div>
