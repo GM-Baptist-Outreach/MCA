@@ -177,6 +177,8 @@ interface PickList {
   paused_for_missing_scores: boolean;
   notes: string | null;
   reminder_email_sent_at: string | null;
+  tracking_number?: string | null;
+  shipped_at?: string | null;
   students:
     | { student_name: string; families?: PackingFamily | PackingFamily[] | null }
     | { student_name: string; families?: PackingFamily | PackingFamily[] | null }[]
@@ -216,7 +218,7 @@ export default function AdminPickLists() {
     const { data, error } = await supabase
       .from("pick_lists")
       .select(
-        "id, school_year, ship_date, status, paused_for_missing_scores, notes, reminder_email_sent_at, students(student_name, families(parent_name, email, phone, address, address_street, address_city, address_state, address_zip)), pick_list_items(id, pace_number, quantity_on_hand, backordered, subjects(name), items(original_name)), resource_book_notices(notified_at, items(original_name))",
+        "id, school_year, ship_date, status, paused_for_missing_scores, notes, reminder_email_sent_at, tracking_number, shipped_at, students(student_name, families(parent_name, email, phone, address, address_street, address_city, address_state, address_zip)), pick_list_items(id, pace_number, quantity_on_hand, backordered, subjects(name), items(original_name)), resource_book_notices(notified_at, items(original_name))",
       )
       .order("ship_date", { ascending: false })
       .limit(100);
@@ -318,10 +320,22 @@ export default function AdminPickLists() {
   };
 
   const markShipped = async (list: PickList) => {
-    if (!window.confirm("Mark this pick list as shipped?")) return;
+    // MCA_R4_SHIPMENT_EMAIL: optional tracking number goes into the family's
+    // shipping email (when Shipping emails are on under Email Templates).
+    const tracking = window.prompt(
+      "Mark this pick list as shipped?\n\nTracking number (optional). The family gets a shipping email with the tracking link if shipping emails are on. Leave blank if there is no tracking number.",
+      "",
+    );
+    if (tracking === null) return;
+    const trackingNumber = tracking.trim() || null;
     const { error } = await supabase
       .from("pick_lists")
-      .update({ status: "shipped", updated_at: new Date().toISOString() })
+      .update({
+        status: "shipped",
+        tracking_number: trackingNumber,
+        shipped_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
       .eq("id", list.id);
     if (error) {
       toast({ title: "Couldn't update", description: error.message, variant: "destructive" });
@@ -422,6 +436,12 @@ export default function AdminPickLists() {
                   </div>
                 </div>
                 {list.notes && <p className="text-sm text-foreground/70">{list.notes}</p>}
+                {list.status === "shipped" && (list.shipped_at || list.tracking_number) && (
+                  <p className="text-xs text-foreground/60" data-marker="MCA_R4_SHIPPED_INFO">
+                    Shipped{list.shipped_at ? ` ${new Date(list.shipped_at).toLocaleString()}` : ""}
+                    {list.tracking_number ? ` · Tracking ${list.tracking_number}` : ""}
+                  </p>
+                )}
                 {list.reminder_email_sent_at && (
                   <p className="text-xs text-foreground/50">
                     Reminder emailed {new Date(list.reminder_email_sent_at).toLocaleString()}

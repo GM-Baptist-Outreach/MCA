@@ -170,10 +170,22 @@ const AdminOrders = () => {
   };
 
   const updateStatus = async (order: Order, newStatus: OrderStatus) => {
+    // MCA_R4_SHIPMENT_EMAIL: a ship-to-home order marked Fulfilled emails the
+    // family (when Shipping emails are on). Ask for an optional tracking number.
+    const update: Record<string, unknown> = { status: newStatus };
+    if (newStatus === "fulfilled" && order.status !== "fulfilled" && order.shipping_address) {
+      const tracking = window.prompt(
+        "Mark this order Fulfilled (shipped)?\n\nTracking number (optional). The customer gets a shipping email with the tracking link if shipping emails are on. Leave blank if there is no tracking number.",
+        "",
+      );
+      if (tracking === null) return;
+      update.tracking_number = tracking.trim() || null;
+      update.shipped_at = new Date().toISOString();
+    }
     setUpdatingId(order.id);
     const { error } = await supabase
       .from("orders")
-      .update({ status: newStatus })
+      .update(update)
       .eq("id", order.id);
 
     if (error) {

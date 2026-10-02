@@ -1,5 +1,100 @@
-import { Link } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useOutletContext } from "react-router-dom";
 import { FileText, ChevronRight } from "lucide-react";
+import { supabase } from "@/lib/supabaseClient";
+import type { PortalContext } from "./PortalLayout";
+import { FormSubmissionCard, type FormSubmission } from "../admin/AdminFamilyDetail";
+
+// MCA_R4_SUBMITTED_FORMS: read-only list of everything this family submitted.
+// RLS (parent_select_own_form_submissions) limits rows to the signed-in
+// parent's own family; the explicit family_id filter keeps admins who are
+// also parents scoped to their own family.
+interface SubmittedRow extends FormSubmission {
+  student_id: string | null;
+  created_at: string;
+}
+
+const UPDATABLE_FORMS = new Set(["pe_activity_log", "music_practice_verification", "goal_card"]);
+
+function SubmittedForms() {
+  const { family, students } = useOutletContext<PortalContext>();
+  const [rows, setRows] = useState<SubmittedRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [studentFilter, setStudentFilter] = useState<string>("all");
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      setLoading(true);
+      const { data, error: loadError } = await supabase
+        .from("form_submissions")
+        .select("id, student_id, form_type, submitted_data, signer_name, signed_at, created_at")
+        .eq("family_id", family.id)
+        .order("signed_at", { ascending: false });
+      if (cancelled) return;
+      if (loadError) setError(loadError.message);
+      setRows((data ?? []) as SubmittedRow[]);
+      setLoading(false);
+    };
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [family.id]);
+
+  const studentName = (id: string | null) =>
+    students.find((s) => s.id === id)?.student_name ?? "Whole family";
+  const visible = rows.filter((row) => studentFilter === "all" || row.student_id === studentFilter);
+
+  return (
+    <section className="space-y-3" data-marker="MCA_R4_SUBMITTED_FORMS">
+      <div className="flex items-end justify-between gap-3 flex-wrap">
+        <div>
+          <h3 className="text-xl font-bold font-serif text-primary">Submitted forms</h3>
+          <p className="text-sm text-foreground/60">
+            Everything your family has sent us. Click a form to see what was submitted.
+          </p>
+        </div>
+        {students.length > 1 && (
+          <select
+            value={studentFilter}
+            onChange={(event) => setStudentFilter(event.target.value)}
+            className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+            aria-label="Filter by student"
+          >
+            <option value="all">All students</option>
+            {students.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.student_name}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+      {loading ? (
+        <p className="text-sm text-foreground/60">Loading...</p>
+      ) : error ? (
+        <p className="text-sm text-destructive">Couldn't load your submitted forms: {error}</p>
+      ) : visible.length === 0 ? (
+        <p className="text-sm text-foreground/60">No forms submitted yet.</p>
+      ) : (
+        <div className="space-y-2">
+          {visible.map((row) => (
+            <FormSubmissionCard
+              key={row.id}
+              submission={row}
+              hideRaw
+              subtitle={`${studentName(row.student_id)} · ${
+                UPDATABLE_FORMS.has(row.form_type) ? "Submitted (you can keep updating it)" : "Submitted"
+              }`}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
 
 const FORMS = [
   {
@@ -66,6 +161,7 @@ export default function PortalForms() {
           </Link>
         ))}
       </div>
+      <SubmittedForms />
     </div>
   );
 }

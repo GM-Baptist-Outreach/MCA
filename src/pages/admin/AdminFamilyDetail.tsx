@@ -51,7 +51,7 @@ interface Enrollment {
   comp_reason: string | null;
 }
 
-interface FormSubmission {
+export interface FormSubmission {
   id: string;
   form_type: string;
   submitted_data: Record<string, any>;
@@ -87,7 +87,7 @@ interface Order {
   created_at: string;
 }
 
-const FORM_TYPE_LABELS: Record<string, string> = {
+export const FORM_TYPE_LABELS: Record<string, string> = {
   enrollment_agreement: "Enrollment Agreement",
   records_release: "Records Release",
   honesty_policy: "Honesty Policy",
@@ -694,7 +694,15 @@ function SubmissionDetails({ submission }: { submission: FormSubmission }) {
   }
 }
 
-function FormSubmissionCard({ submission }: { submission: FormSubmission }) {
+export function FormSubmissionCard({
+  submission,
+  hideRaw = false,
+  subtitle,
+}: {
+  submission: FormSubmission;
+  hideRaw?: boolean;
+  subtitle?: string;
+}) {
   const [expanded, setExpanded] = useState(false);
   const hasData =
     isPlainObject(submission.submitted_data) &&
@@ -711,7 +719,7 @@ function FormSubmissionCard({ submission }: { submission: FormSubmission }) {
             {FORM_TYPE_LABELS[submission.form_type] ?? formatKey(submission.form_type)}
           </p>
           <p className="text-xs text-foreground/50">
-            Signed by {submission.signer_name} on{" "}
+            {subtitle ? `${subtitle} · ` : ""}Signed by {submission.signer_name} on{" "}
             {new Date(submission.signed_at).toLocaleString()}
           </p>
         </div>
@@ -729,14 +737,16 @@ function FormSubmissionCard({ submission }: { submission: FormSubmission }) {
           ) : (
             <p className="text-foreground/60">No data was entered on this form.</p>
           )}
-          <details className="mt-2">
-            <summary className="cursor-pointer text-xs text-primary">
-              View raw submitted data
-            </summary>
-            <pre className="mt-2 text-xs bg-secondary/50 p-3 rounded-md overflow-x-auto">
-              {JSON.stringify(submission.submitted_data, null, 2)}
-            </pre>
-          </details>
+          {!hideRaw && (
+            <details className="mt-2">
+              <summary className="cursor-pointer text-xs text-primary">
+                View raw submitted data
+              </summary>
+              <pre className="mt-2 text-xs bg-secondary/50 p-3 rounded-md overflow-x-auto">
+                {JSON.stringify(submission.submitted_data, null, 2)}
+              </pre>
+            </details>
+          )}
         </div>
       )}
     </div>
