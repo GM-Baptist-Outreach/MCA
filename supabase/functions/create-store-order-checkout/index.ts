@@ -23,6 +23,11 @@ import {
 // Shippo rates are used only when fulfillment is ship and the active mode's
 // Shippo key is set. Any Shippo miss falls back to shipping_rate_tiers.
 // Pickup never calls Shippo. Enrollment never calls this function.
+//
+// Round 10 (MCA_R10_SAVED_CARDS_STORE): when a signed-in parent checks out
+// (body.portal_access_token = their portal session) and the checkout email is
+// their family's email, Checkout shows the family's saved cards and offers to
+// save the new one. Anonymous checkouts never see saved cards.
 
 const OK_SALES_TAX_RATE = 0.10;
 
@@ -275,11 +280,39 @@ Deno.serve(async (req: Request) => {
       shippo_rate_id: shippoRateId,
     };
 
+    let savedCardOptions: Record<string, unknown> = {};
+    const portalToken = typeof body?.portal_access_token === "string" ? body.portal_access_token : "";
+    if (portalToken) {
+      try {
+        const { data: userData } = await admin.auth.getUser(portalToken);
+        if (userData?.user) {
+          const { data: fam } = await admin
+            .from("families")
+            .select("id, email")
+            .eq("auth_user_id", userData.user.id)
+            .maybeSingle();
+          const famEmail = String(fam?.email ?? "").trim().toLowerCase();
+          if (fam && famEmail && famEmail === String(customer.email).trim().toLowerCase()) {
+            savedCardOptions = {
+              saved_payment_method_options: {
+                allow_redisplay_filters: ["always", "limited", "unspecified"],
+                payment_method_save: "enabled",
+              },
+            };
+            metadata.family_id = fam.id as string;
+          }
+        }
+      } catch (err) {
+        console.error("[store-checkout] portal token check failed", err);
+      }
+    }
+
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       customer: stripeCustomer.id,
       line_items,
       allow_promotion_codes: true,
+      ...savedCardOptions,
       success_url: `${siteUrl}/store?status=success`,
       cancel_url: `${siteUrl}/store?status=cancelled`,
       metadata,

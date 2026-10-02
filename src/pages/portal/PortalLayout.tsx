@@ -385,6 +385,14 @@ export function portalTourSteps(showProjection: boolean): SpotlightStep[] {
       target: ["portal-student-switcher", "portal-home"],
     },
     {
+      id: "at-a-glance",
+      title: "At a glance",
+      body:
+        "Your home page sums up the selected student: current PACEs, what ships next, recent test scores, and anything owed. When a student finishes a level, a congratulations message shows up here too.",
+      route: PORTAL_ROUTE,
+      target: ["portal-at-a-glance", "portal-home"],
+    },
+    {
       id: "upload",
       title: "Upload Tests",
       body:
@@ -448,6 +456,14 @@ export function portalTourSteps(showProjection: boolean): SpotlightStep[] {
         "Pick a semester or the full year and download a progress report PDF with your student's PACEs and test scores. High school students also have a Transcript button.",
       route: PORTAL_ROUTE,
       target: ["portal-report-downloads"],
+    },
+    {
+      id: "payment-methods",
+      title: "Saved card and autopay",
+      body:
+        "Save a card once and it's used for tuition autopay and offered at the store checkout. You can change or remove it here any time.",
+      route: PORTAL_ROUTE,
+      target: ["portal-payment-methods"],
     },
     {
       id: "forms",

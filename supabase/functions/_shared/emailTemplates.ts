@@ -142,4 +142,6 @@ export const SAMPLE_TEMPLATE_VARS: TemplateVars = {
     '<p><strong>Tracking:</strong> <a href="https://tools.usps.com/go/TrackConfirmAction?tLabels=9400111899223197428490">9400111899223197428490</a></p>',
   student_names: "Jordan Sample",
   overdue_list: "<ul><li>Jordan Sample: Math PACE 1037 (handed out Sep 1)</li></ul>",
+  celebration_title: "Finished Math Level 3",
+  celebration_line: "finished Math Level 3",
 };

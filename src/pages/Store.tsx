@@ -496,6 +496,15 @@ export default function Store() {
     });
 
     try {
+      // Round 10 (MCA_R10_SAVED_CARD): a signed-in parent's session lets the
+      // checkout attach the order to their Stripe customer so saved cards show.
+      let portalAccessToken: string | undefined;
+      try {
+        const { data: sess } = await supabase.auth.getSession();
+        portalAccessToken = sess.session?.access_token ?? undefined;
+      } catch {
+        portalAccessToken = undefined;
+      }
       const res = await fetch(
         `${SUPABASE_URL}/functions/v1/create-store-order-checkout`,
         {
@@ -521,6 +530,7 @@ export default function Store() {
                   }
                 : customer,
             origin: window.location.origin,
+            ...(portalAccessToken ? { portal_access_token: portalAccessToken } : {}),
           }),
         },
       );

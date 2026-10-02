@@ -67,6 +67,8 @@ const SAMPLE_VARS: Record<string, string> = {
     '<p><strong>Tracking:</strong> <a href="https://tools.usps.com/go/TrackConfirmAction?tLabels=9400111899223197428490">9400111899223197428490</a></p>',
   student_names: "Jordan Sample",
   overdue_list: "<ul><li>Jordan Sample: Math PACE 1037 (handed out Sep 1)</li></ul>",
+  celebration_title: "Finished Math Level 3",
+  celebration_line: "finished every Math PACE in Level 3",
 };
 
 const RAW_KEYS = new Set([
@@ -81,7 +83,7 @@ const RAW_KEYS = new Set([
 
 // Round 4 templates are sent by the family-emails function, which knows
 // their sample values for "Send test to me".
-const FAMILY_EMAIL_KEYS = new Set(["shipment_notice", "overdue_test_nudge"]);
+const FAMILY_EMAIL_KEYS = new Set(["shipment_notice", "overdue_test_nudge", "celebration"]);
 
 // ---------------------------------------------------------------------------
 // MCA_R4_EMAIL_SWITCHES: on/off switches for the automatic family emails,
@@ -112,7 +114,20 @@ const SWITCHES: Array<{ key: string; label: string; help: string; fallback: bool
     help: "Gentle reminder when a PACE was marked Issued 28+ days ago and no test has been uploaded. Only PACEs issued after this feature went live count. At most once per PACE and once per family per week. Sent daily at 9:40 AM Eastern (8:40 AM in winter).",
     fallback: false,
   },
+  {
+    // Round 10 (MCA_R10_CELEBRATION_EMAIL)
+    key: "email_celebration_enabled",
+    label: "Celebration emails",
+    help: "Congratulations email when a student passes the last PACE of a level in a subject, or finishes every PACE for the school year. The parent also sees a congratulations screen in the portal either way.",
+    fallback: true,
+  },
 ];
+
+const LOG_KIND_LABELS: Record<string, string> = {
+  shipment: "Shipping",
+  overdue_test: "Test reminder",
+  celebration: "Celebration",
+};
 
 async function callFamilyEmails(body: Record<string, unknown>) {
   const { data: sessionData } = await supabase.auth.getSession();
@@ -249,7 +264,7 @@ function AutomaticEmails() {
             {log.map((row) => (
               <li key={row.id} className="flex flex-wrap items-center justify-between gap-2 border-b border-border/40 py-1">
                 <span>
-                  {new Date(row.created_at).toLocaleString()} · {row.kind === "shipment" ? "Shipping" : "Test reminder"}
+                  {new Date(row.created_at).toLocaleString()} · {LOG_KIND_LABELS[row.kind] ?? row.kind}
                   {studentOf(row) ? ` · ${studentOf(row)}` : ""} ·{" "}
                   <span className="font-medium">{row.status}</span>
                   {row.detail ? ` (${row.detail})` : ""}
@@ -425,6 +440,7 @@ export function AdminEmailTemplates() {
   return (
     <section className="space-y-4">
       <AutomaticEmails />
+      <WeeklySummarySettings />
       <div>
         <h3 className="text-xl font-bold font-serif text-primary">Parent emails</h3>
         <p className="text-sm text-foreground/60">
@@ -763,6 +779,168 @@ export function SmsWebhooks() {
 // ---------------------------------------------------------------------------
 // MCA_R8_SCHOOL_NUMBERS: graduation credits required and the reorder look-ahead.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Round 10 (MCA_R10_WEEKLY_SUMMARY): Monday-morning summary email to David.
+// ---------------------------------------------------------------------------
+
+interface WeeklyRun {
+  id: string;
+  ran_at: string;
+  trigger: string;
+  sent_to: string | null;
+  status: string;
+  detail: string | null;
+}
+
+export function WeeklySummarySettings() {
+  const { toast } = useToast();
+  const [enabled, setEnabled] = useState(true);
+  const [recipient, setRecipient] = useState("");
+  const [savedRecipient, setSavedRecipient] = useState("");
+  const [runs, setRuns] = useState<WeeklyRun[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const load = async () => {
+    const [settingsRes, runsRes] = await Promise.all([
+      supabase
+        .from("app_settings")
+        .select("key, value")
+        .in("key", ["weekly_summary_enabled", "weekly_summary_recipient"]),
+      supabase
+        .from("weekly_summary_runs")
+        .select("id, ran_at, trigger, sent_to, status, detail")
+        .order("ran_at", { ascending: false })
+        .limit(5),
+    ]);
+    const rows = settingsRes.data ?? [];
+    const en = rows.find((r) => r.key === "weekly_summary_enabled");
+    const rc = rows.find((r) => r.key === "weekly_summary_recipient");
+    setEnabled(en ? en.value !== "false" : true);
+    setRecipient(rc?.value ?? "");
+    setSavedRecipient(rc?.value ?? "");
+    setRuns((runsRes.data ?? []) as WeeklyRun[]);
+  };
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const save = async (key: string, value: string) => {
+    setBusy(key);
+    const { error } = await supabase.from("app_settings").upsert({ key, value }, { onConflict: "key" });
+    setBusy(null);
+    if (error) {
+      toast({ title: "Couldn't save", description: error.message, variant: "destructive" });
+      return false;
+    }
+    return true;
+  };
+
+  const toggle = async (on: boolean) => {
+    if (await save("weekly_summary_enabled", on ? "true" : "false")) {
+      setEnabled(on);
+      toast({ title: on ? "Weekly summary turned on" : "Weekly summary turned off" });
+    }
+  };
+
+  const saveRecipient = async () => {
+    const email = recipient.trim();
+    if (!/^[^@\s,]+@[^@\s,]+\.[^@\s,]+$/.test(email)) {
+      toast({ title: "Enter one valid email address", variant: "destructive" });
+      return;
+    }
+    if (await save("weekly_summary_recipient", email)) {
+      setSavedRecipient(email);
+      setRecipient(email);
+      toast({ title: "Recipient saved" });
+    }
+  };
+
+  const preview = async () => {
+    setBusy("preview");
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) throw new Error("Sign in again first.");
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/weekly-summary`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "preview" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) throw new Error(data.error || `Request failed (${res.status})`);
+      toast({ title: data.sent ? "Preview sent" : "Preview was not sent", description: `Only ${data.to} gets this preview.` });
+      load();
+    } catch (err) {
+      toast({ title: "Couldn't send the preview", description: (err as Error).message, variant: "destructive" });
+    }
+    setBusy(null);
+  };
+
+  return (
+    <section
+      className="space-y-3 rounded-xl border border-border/50 p-4"
+      data-marker="MCA_R10_WEEKLY_SUMMARY"
+      data-tour="admin-weekly-summary"
+    >
+      <div>
+        <h3 className="text-lg font-bold font-serif text-primary">Weekly summary email</h3>
+        <p className="text-sm text-foreground/60">
+          Every Monday at 8 AM Eastern: new enrollments, overdue tests, low stock and reorder-soon items, boxes shipped,
+          and money collected over the past 7 days.
+        </p>
+      </div>
+      <div className="flex items-start justify-between gap-4 rounded-lg bg-secondary/30 p-3">
+        <div>
+          <Label htmlFor="weekly_summary_enabled" className="font-medium">Send the weekly summary</Label>
+          <p className="text-xs text-foreground/60">Goes to the address below only. Families never get it.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-foreground/60 w-6">{enabled ? "On" : "Off"}</span>
+          <Switch id="weekly_summary_enabled" checked={enabled} disabled={busy !== null} onCheckedChange={toggle} />
+        </div>
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor="weekly_summary_recipient" className="text-sm">Send it to</Label>
+        <div className="flex flex-wrap gap-2">
+          <Input
+            id="weekly_summary_recipient"
+            className="max-w-sm"
+            value={recipient}
+            placeholder="david@midwestchristianacademy.com"
+            onChange={(e) => setRecipient(e.target.value)}
+          />
+          <Button type="button" size="sm" variant="outline" disabled={busy !== null || recipient === savedRecipient} onClick={saveRecipient}>
+            Save
+          </Button>
+          <Button type="button" size="sm" variant="outline" disabled={busy !== null} onClick={preview}>
+            {busy === "preview" ? "Sending..." : "Send me a preview"}
+          </Button>
+        </div>
+        <p className="text-xs text-foreground/60">The preview goes only to you, the signed-in admin.</p>
+      </div>
+      <div className="space-y-1">
+        <p className="text-xs uppercase tracking-wide text-foreground/50">Recent summaries</p>
+        {runs.length === 0 ? (
+          <p className="text-xs text-foreground/60">None yet. The first one goes out next Monday.</p>
+        ) : (
+          <ul className="space-y-1 text-xs">
+            {runs.map((r) => (
+              <li key={r.id} className="border-b border-border/40 py-1">
+                {new Date(r.ran_at).toLocaleString()} · {r.trigger === "preview" ? "Preview" : "Weekly"} ·{" "}
+                <span className="font-medium">{r.status}</span>
+                {r.sent_to ? ` to ${r.sent_to}` : ""}
+                {r.detail ? ` (${r.detail})` : ""}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
+  );
+}
 
 const SCHOOL_NUMBERS: Array<{ key: string; label: string; help: string; fallback: string; min: number; max: number }> = [
   {

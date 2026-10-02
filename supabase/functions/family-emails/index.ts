@@ -13,7 +13,7 @@ import {
 //
 // Actions (POST JSON):
 //   { action: "send_pending" }      cron / DB trigger. Sends queued shipment
-//                                   emails from family_email_log.
+//                                   and celebration emails from family_email_log.
 //   { action: "overdue_nudges", dry_run? }
 //                                   daily cron (only scheduled to run when the
 //                                   switch is on). Admin may pass dry_run.
@@ -25,6 +25,11 @@ import {
 //
 // Auth: admin JWT, or x-cron-secret (CRON_SECRET env or Vault mca_cron_secret).
 // Test accounts (families.is_test_account) never get these emails.
+//
+// Round 10 (MCA_R10_CELEBRATION_EMAIL): kind "celebration" rows are queued by
+// the student_pace_slots trigger mca_detect_celebrations when a student
+// finishes a level or a school year through an uploaded test. Switch:
+// app_settings.email_celebration_enabled (default on).
 //
 // OVERDUE RULE (conservative, MCA_R4_OVERDUE_RULE): a PACE is overdue when
 //   - its slot status is "issued" (handed to the student) with no score and no
@@ -135,9 +140,23 @@ const OVERDUE_FALLBACK = {
 </div>`,
 };
 
+const CELEBRATION_FALLBACK = {
+  subject: "Congratulations, {{student_name}}! {{celebration_title}}",
+  html: `<div style="font-family: Georgia, serif; color: #1a1a2e; max-width: 600px;">
+  <p style="font-size: 40px; margin: 0;">&#127881;</p>
+  <h2 style="margin-top: 8px;">Congratulations, {{student_name}}!</h2>
+  <p>Hi {{parent_first_name}},</p>
+  <p>We just recorded a big milestone: <strong>{{student_name}} {{celebration_line}}</strong>. That takes steady, faithful work, and we're proud of you both.</p>
+  <p>Sign in to the Parent Portal to see the celebration and what's next: <a href="{{portal_url}}">{{portal_url}}</a></p>
+  <p>"Whatever you do, work at it with all your heart." Colossians 3:23</p>
+  <p>Midwest Christian Academy · (844) 663-4477</p>
+</div>`,
+};
+
 type LogRow = {
   id: string;
   kind: string;
+  celebration_id?: string | null;
   family_id: string | null;
   student_id: string | null;
   order_id: string | null;
@@ -218,12 +237,39 @@ async function renderShipment(admin: SupabaseClient, row: LogRow) {
   return await renderTemplate(admin as never, "shipment_notice", vars, SHIPMENT_FALLBACK);
 }
 
+async function renderCelebration(admin: SupabaseClient, row: LogRow) {
+  const { data: cel } = await admin
+    .from("student_celebrations")
+    .select("id, kind, title, level, school_year, subjects(name), students(student_name, families(parent_name))")
+    .eq("id", row.celebration_id ?? "")
+    .maybeSingle();
+  const student = one(cel?.students as unknown as { student_name: string; families: unknown } | null);
+  const parentName = one(student?.families as unknown as { parent_name: string } | null)?.parent_name ?? null;
+  const studentName = student?.student_name ?? "your student";
+  const subject = one(cel?.subjects as unknown as { name: string } | null)?.name ?? null;
+  const title = (cel?.title as string | undefined) ?? "Finished a milestone";
+  let line = "reached a new milestone";
+  if (cel?.kind === "school_year") line = `finished the ${cel.school_year} school year`;
+  else if (cel?.kind === "level") {
+    line = title.replace(/^Finished\s+/i, "finished ");
+    if (!subject) line = "finished a PACE level";
+  }
+  return await renderTemplate(admin as never, "celebration", {
+    parent_first_name: firstName(parentName),
+    student_name: studentName,
+    celebration_title: title,
+    celebration_line: line,
+    portal_url: PORTAL_LOGIN_URL,
+  }, CELEBRATION_FALLBACK);
+}
+
 async function sendPending(admin: SupabaseClient) {
-  const enabled = (await setting(admin, "email_shipping_enabled", "true")) === "true";
+  const shippingOn = (await setting(admin, "email_shipping_enabled", "true")) === "true";
+  const celebrationOn = (await setting(admin, "email_celebration_enabled", "true")) === "true";
   const { data: rows, error } = await admin
     .from("family_email_log")
-    .select("id, kind, family_id, student_id, order_id, pick_list_id, to_email, status, attempts")
-    .eq("kind", "shipment")
+    .select("id, kind, family_id, student_id, order_id, pick_list_id, to_email, status, attempts, celebration_id")
+    .in("kind", ["shipment", "celebration"])
     .or(`status.eq.pending,and(status.eq.failed,attempts.lt.${MAX_ATTEMPTS})`)
     .order("created_at")
     .limit(50);
@@ -239,8 +285,12 @@ async function sendPending(admin: SupabaseClient) {
       .select("id")
       .maybeSingle();
     if (!claimed) continue;
+    const enabled = row.kind === "celebration" ? celebrationOn : shippingOn;
     if (!enabled) {
-      await admin.from("family_email_log").update({ status: "skipped", detail: "Shipping emails are turned off" }).eq("id", row.id);
+      await admin.from("family_email_log").update({
+        status: "skipped",
+        detail: row.kind === "celebration" ? "Celebration emails are turned off" : "Shipping emails are turned off",
+      }).eq("id", row.id);
       results.push({ id: row.id, skipped: "disabled" });
       continue;
     }
@@ -257,7 +307,7 @@ async function sendPending(admin: SupabaseClient) {
       continue;
     }
     try {
-      const rendered = await renderShipment(admin, row);
+      const rendered = row.kind === "celebration" ? await renderCelebration(admin, row) : await renderShipment(admin, row);
       const sent = await sendResendEmail({ to: row.to_email, subject: rendered.subject, html: rendered.html });
       await admin
         .from("family_email_log")
@@ -511,12 +561,14 @@ Deno.serve(async (req: Request) => {
     if (body.action === "preview") {
       const { data: row } = await admin
         .from("family_email_log")
-        .select("id, kind, family_id, student_id, order_id, pick_list_id, to_email, status, attempts")
+        .select("id, kind, family_id, student_id, order_id, pick_list_id, to_email, status, attempts, celebration_id")
         .eq("id", String(body.log_id ?? ""))
         .maybeSingle();
       if (!row) return json({ error: "Log row not found" }, 404);
       const rendered = row.kind === "shipment"
         ? await renderShipment(admin, row as LogRow)
+        : row.kind === "celebration"
+        ? await renderCelebration(admin, row as LogRow)
         : await renderOverduePreview(admin, row as LogRow);
       const sent = await sendResendEmail({
         to: caller.email,

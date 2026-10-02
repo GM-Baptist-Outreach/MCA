@@ -28,6 +28,7 @@ import AdminAcademicProjection, {
 } from "./pages/admin/AdminAcademicProjection";
 import AdminPickLists from "./pages/admin/AdminPickLists";
 import { AdminTestReviews } from "./pages/admin/AdminFamilyDetail";
+import AdminReenrollment from "./pages/admin/AdminReenrollment";
 import Store from "./pages/Store";
 import PortalLogin from "./pages/portal/PortalLogin";
 import PortalLayout from "./pages/portal/PortalLayout";
@@ -80,6 +81,7 @@ const App = () => (
             <Route path="pick-lists" element={<AdminPickLists />} />
             <Route path="backorders" element={<Navigate to="/admin/pick-lists?tab=backordered" replace />} />
             <Route path="test-reviews" element={<AdminTestReviews />} />
+            <Route path="reenrollment" element={<AdminReenrollment />} />
             <Route path="emails" element={<div className="max-w-2xl"><AdminEmailTemplates /></div>} />
             <Route path="help" element={<AdminHelp />} />
             <Route

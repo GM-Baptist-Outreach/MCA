@@ -1,6 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
-import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFPage } from "npm:pdf-lib@1.17.1";
+import { PDFDocument, StandardFonts, degrees, rgb, type PDFFont, type PDFImage, type PDFPage } from "npm:pdf-lib@1.17.1";
 import {
   average,
   compareSubjectNames,
@@ -24,7 +24,14 @@ import {
 // POST JSON (signed-in parent or admin):
 //   { kind: "progress", student_id, school_year?, period?: "S1" | "S2" | "year" }
 //   { kind: "transcript", student_id }
+//   { kind: "diploma", student_id, preview?, graduation_date? }   (Round 10)
 // Returns application/pdf.
+//
+// Diploma (MCA_R10_DIPLOMA): only once the student has met the graduation
+// requirement (credits earned >= the school total, every required subject and
+// the electives covered; same math as the credit bar). Admins may pass
+// preview: true for a sample stamped "SAMPLE - NOT YET ELIGIBLE", and may set
+// graduation_date (YYYY-MM-DD); otherwise it's dated today (Central).
 //
 // Access: the caller's own Supabase client must be able to read the student
 // (RLS: a parent sees only their own students, admins see all). All data for
@@ -660,6 +667,128 @@ async function transcript(admin: SupabaseClient, student: StudentRow) {
   return { bytes: await doc.finish(), filename: `${fileSlug(student.student_name)}-transcript.pdf` };
 }
 
+function ordinal(n: number): string {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return `${n}${s[(v - 20) % 10] || s[v] || s[0]}`;
+}
+
+export function diplomaEligible(p: { earned: number; totalRequired: number; remainingBySubject: unknown[]; electivesRemaining: number }): boolean {
+  return p.earned + 0.001 >= p.totalRequired && p.remainingBySubject.length === 0 && p.electivesRemaining <= 0.001;
+}
+
+async function diploma(
+  admin: SupabaseClient,
+  student: StudentRow,
+  opts: { preview: boolean; isAdmin: boolean; graduationDate: string | null },
+): Promise<{ bytes: Uint8Array; filename: string } | { error: string; status: number }> {
+  const grad = await loadGraduation(admin, student.id);
+  const eligible = diplomaEligible(grad.progress);
+  if (!eligible && !(opts.isAdmin && opts.preview)) {
+    return {
+      error: `The diploma unlocks once all graduation requirements are met (${grad.progress.earned.toFixed(2)} of ${grad.progress.totalRequired.toFixed(0)} credits earned so far).`,
+      status: 409,
+    };
+  }
+  const dateIso = opts.isAdmin && opts.graduationDate && /^\d{4}-\d{2}-\d{2}$/.test(opts.graduationDate) ? opts.graduationDate : todayCentral();
+  const [y, m, d] = dateIso.split("-").map(Number);
+  const monthName = new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", { month: "long", timeZone: "UTC" });
+
+  const pdf = await PDFDocument.create();
+  pdf.setTitle(safe(`Diploma - ${student.student_name}`));
+  pdf.setAuthor(SCHOOL_NAME);
+  pdf.setCreator(SCHOOL_WEB);
+  const W = 792;
+  const H = 612;
+  const page = pdf.addPage([W, H]);
+  const serif = await pdf.embedFont(StandardFonts.TimesRoman);
+  const serifBold = await pdf.embedFont(StandardFonts.TimesRomanBold);
+  const serifItalic = await pdf.embedFont(StandardFonts.TimesRomanItalic);
+  const script = await pdf.embedFont(StandardFonts.TimesRomanBoldItalic);
+  let logo: PDFImage | null = null;
+  try {
+    const res = await fetch(LOGO_URL, { signal: AbortSignal.timeout(6000) });
+    if (res.ok) {
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      logo = bytes[0] === 0x89 ? await pdf.embedPng(bytes) : await pdf.embedJpg(bytes);
+    }
+  } catch (_err) {
+    logo = null;
+  }
+
+  // Borders
+  page.drawRectangle({ x: 0, y: 0, width: W, height: H, color: rgb(0.995, 0.99, 0.97) });
+  page.drawRectangle({ x: 22, y: 22, width: W - 44, height: H - 44, borderColor: NAVY, borderWidth: 6 });
+  page.drawRectangle({ x: 34, y: 34, width: W - 68, height: H - 68, borderColor: GOLD, borderWidth: 2 });
+  page.drawRectangle({ x: 40, y: 40, width: W - 80, height: H - 80, borderColor: GOLD, borderWidth: 0.6 });
+
+  const center = (text: string, y: number, size: number, font: PDFFont, color = rgb(0.1, 0.1, 0.18)) => {
+    const t = safe(text);
+    const w = font.widthOfTextAtSize(t, size);
+    page.drawText(t, { x: (W - w) / 2, y, size, font, color });
+  };
+  const fitSize = (text: string, font: PDFFont, max: number, start: number) => {
+    let size = start;
+    while (size > 18 && font.widthOfTextAtSize(safe(text), size) > max) size -= 1;
+    return size;
+  };
+
+  let top = H - 70;
+  if (logo) {
+    const h = 64;
+    const w = (logo.width / logo.height) * h;
+    page.drawImage(logo, { x: (W - w) / 2, y: top - h, width: w, height: h });
+    top -= h + 14;
+  }
+  center(SCHOOL_NAME, top - 26, 32, serifBold, NAVY);
+  center(SCHOOL_ADDRESS, top - 46, 11, serifItalic, GREY);
+  center("This certifies that", top - 88, 16, serifItalic);
+  const nameSize = fitSize(student.student_name, script, W - 200, 44);
+  center(student.student_name, top - 140, nameSize, script, NAVY);
+  page.drawRectangle({ x: 170, y: top - 150, width: W - 340, height: 0.8, color: GOLD });
+  center("has satisfactorily completed the course of study prescribed for graduation", top - 180, 14, serif);
+  center("from High School and is therefore awarded this", top - 199, 14, serif);
+  center("DIPLOMA", top - 246, 40, serifBold, NAVY);
+  center(
+    `Given this ${ordinal(d)} day of ${monthName}, ${y}, with ${grad.progress.earned.toFixed(2)} credits earned.`,
+    top - 274,
+    13,
+    serifItalic,
+  );
+
+  // Signature lines
+  const lineY = 92;
+  page.drawRectangle({ x: 110, y: lineY, width: 220, height: 0.8, color: rgb(0.2, 0.2, 0.2) });
+  page.drawRectangle({ x: W - 330, y: lineY, width: 220, height: 0.8, color: rgb(0.2, 0.2, 0.2) });
+  const under = (text: string, x: number) => {
+    const t = safe(text);
+    page.drawText(t, { x: x + (220 - serif.widthOfTextAtSize(t, 11)) / 2, y: lineY - 15, size: 11, font: serif, color: GREY });
+  };
+  under("Administrator", 110);
+  under("Date", W - 330);
+  center(`${SCHOOL_PHONE}  ·  ${SCHOOL_WEB}`, 52, 9, serif, GREY);
+
+  if (!eligible) {
+    const mark = "SAMPLE - NOT YET ELIGIBLE";
+    const size = 46;
+    const w = serifBold.widthOfTextAtSize(mark, size);
+    page.drawText(mark, {
+      x: W / 2 - (w / 2) * Math.cos(Math.PI / 9),
+      y: H / 2 - (w / 2) * Math.sin(Math.PI / 9),
+      size,
+      font: serifBold,
+      color: rgb(0.85, 0.2, 0.2),
+      opacity: 0.28,
+      rotate: degrees(20),
+    });
+  }
+
+  return {
+    bytes: await pdf.save(),
+    filename: `${fileSlug(student.student_name)}-diploma${eligible ? "" : "-sample"}.pdf`,
+  };
+}
+
 // ---------------------------------------------------------------------------
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -667,7 +796,7 @@ Deno.serve(async (req) => {
   const auth = req.headers.get("Authorization");
   if (!auth) return json({ error: "Sign in first." }, 401);
 
-  let body: { kind?: string; student_id?: string; school_year?: string; period?: string };
+  let body: { kind?: string; student_id?: string; school_year?: string; period?: string; preview?: boolean; graduation_date?: string };
   try {
     body = await req.json();
   } catch {
@@ -695,6 +824,15 @@ Deno.serve(async (req) => {
     let out: { bytes: Uint8Array; filename: string };
     if (body.kind === "transcript") {
       out = await transcript(admin, student as StudentRow);
+    } else if (body.kind === "diploma") {
+      const { data: isAdmin } = await userClient.rpc("is_admin");
+      const result = await diploma(admin, student as StudentRow, {
+        preview: body.preview === true,
+        isAdmin: !!isAdmin,
+        graduationDate: typeof body.graduation_date === "string" ? body.graduation_date : null,
+      });
+      if ("error" in result) return json({ error: result.error }, result.status);
+      out = result;
     } else if (body.kind === "progress") {
       const schoolYear = /^\d{4}-\d{2}$/.test(body.school_year ?? "") ? body.school_year! : currentSchoolYear();
       const period = (["S1", "S2", "year"].includes(body.period ?? "") ? body.period : currentReportPeriod()) as ReportPeriod;

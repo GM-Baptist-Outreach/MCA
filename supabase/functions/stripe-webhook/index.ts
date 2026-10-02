@@ -275,9 +275,51 @@ Deno.serve(async (req: Request) => {
         const session = event.data.object as Stripe.Checkout.Session;
         const metadata = (session.metadata ?? {}) as Record<string, string>;
 
+        // ---- Round 10 (MCA_R10_SAVE_CARD): a card saved from the Parent Portal ----
+        // Setup-mode sessions never charge and never create a family. Make the
+        // new card the customer's default if there isn't one yet, and use it
+        // for any subscription that has no card of its own.
+        if (session.mode === "setup" || metadata.purpose === "save_card") {
+          try {
+            const customerId = typeof session.customer === "string" ? session.customer : session.customer?.id;
+            const setupIntentId = typeof session.setup_intent === "string" ? session.setup_intent : session.setup_intent?.id;
+            if (customerId && setupIntentId) {
+              const si = await stripe.setupIntents.retrieve(setupIntentId);
+              const pmId = typeof si.payment_method === "string" ? si.payment_method : si.payment_method?.id;
+              const customer = (await stripe.customers.retrieve(customerId)) as Stripe.Customer;
+              if (pmId && !customer.invoice_settings?.default_payment_method) {
+                await stripe.customers.update(customerId, { invoice_settings: { default_payment_method: pmId } });
+              }
+              if (pmId) {
+                const subs = await stripe.subscriptions.list({ customer: customerId, status: "active", limit: 20 });
+                for (const sub of subs.data) {
+                  if (!sub.default_payment_method) {
+                    await stripe.subscriptions.update(sub.id, { default_payment_method: pmId });
+                  }
+                }
+              }
+              if (metadata.family_id) {
+                await admin.from("families").update({ stripe_customer_id: customerId }).eq("id", metadata.family_id).is("stripe_customer_id", null);
+              }
+            }
+          } catch (err) {
+            console.error("[stripe-webhook] save-card follow-up failed", err);
+          }
+          break;
+        }
+
         // ---- Comp-to-paid conversion branch (existing enrollment, no new rows) ----
+        // Round 10: re-enrollment payments reuse this branch and also carry
+        // metadata.reenrollment_id (see portal-reenroll).
         if (metadata.conversion_of_enrollment_id) {
           const enrollmentId = metadata.conversion_of_enrollment_id;
+          const reenrollmentId = metadata.reenrollment_id || null;
+          if (reenrollmentId) {
+            const { data: re } = await admin.from("reenrollments").select("tuition_tier").eq("id", reenrollmentId).maybeSingle();
+            if (re?.tuition_tier) {
+              await admin.from("enrollments").update({ tuition_tier: re.tuition_tier }).eq("id", enrollmentId);
+            }
+          }
 
           const { data: enrollment } = await admin
             .from("enrollments")
@@ -323,12 +365,23 @@ Deno.serve(async (req: Request) => {
             .update({ stripe_customer_id: session.customer as string })
             .eq("id", enrollment.family_id);
 
+          if (reenrollmentId) {
+            await admin
+              .from("enrollments")
+              .update({ status: "active", cancel_at_period_end: false, cancellation_reason: null })
+              .eq("id", enrollment.id);
+            await admin
+              .from("reenrollments")
+              .update({ status: "paid", paid_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+              .eq("id", reenrollmentId);
+          }
+
           const [{ data: family }, { data: student }] = await Promise.all([
             admin.from("families").select("email, parent_name, ghl_contact_id").eq("id", enrollment.family_id).single(),
             admin.from("students").select("student_name").eq("id", enrollment.student_id).single(),
           ]);
 
-          if (family?.ghl_contact_id) {
+          if (family?.ghl_contact_id && !reenrollmentId) {
             await addGhlTag(family.ghl_contact_id, "converted-to-paid");
           }
 

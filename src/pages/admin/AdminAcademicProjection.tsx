@@ -813,10 +813,12 @@ export const MCA_R8_STUDENT_RECORDS = "MCA_R8_STUDENT_RECORDS";
 const RECORDS_FUNCTION_URL = "https://proiyioqfbjcmprsnqhf.supabase.co/functions/v1/student-records-pdf";
 
 export async function downloadStudentPdf(body: {
-  kind: "progress" | "transcript";
+  kind: "progress" | "transcript" | "diploma";
   student_id: string;
   school_year?: string;
   period?: ReportPeriod;
+  preview?: boolean;
+  graduation_date?: string;
 }): Promise<string> {
   const { data: sessionData } = await supabase.auth.getSession();
   const token = sessionData.session?.access_token;
@@ -832,7 +834,8 @@ export async function downloadStudentPdf(body: {
   }
   const disposition = res.headers.get("content-disposition") ?? "";
   const match = disposition.match(/filename="([^"]+)"/);
-  const filename = match?.[1] ?? (body.kind === "transcript" ? "transcript.pdf" : "progress-report.pdf");
+  const filename =
+    match?.[1] ?? (body.kind === "transcript" ? "transcript.pdf" : body.kind === "diploma" ? "diploma.pdf" : "progress-report.pdf");
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -850,31 +853,44 @@ function previousSchoolYear(year: string): string {
   return `${start}-${String(start + 1).slice(-2)}`;
 }
 
-/** Semester / year picker plus the progress report and transcript buttons. */
+/** Round 10 (MCA_R10_DIPLOMA): same rule as the student-records-pdf function. */
+export function isDiplomaEligible(p: GraduationProgress | null): boolean {
+  if (!p) return false;
+  return p.earned + 0.001 >= p.totalRequired && p.remainingBySubject.length === 0 && p.electivesRemaining <= 0.001;
+}
+
+/** Semester / year picker plus the progress report, transcript and diploma buttons. */
 export function StudentRecordsDownloads({
   studentId,
   highSchool,
   tourId,
   compact = false,
+  adminView = false,
 }: {
   studentId: string;
   highSchool: boolean;
   tourId?: string;
   compact?: boolean;
+  /** Admins can download a watermarked diploma sample before a student is eligible. */
+  adminView?: boolean;
 }) {
   const { toast } = useToast();
   const thisYear = currentSchoolYear();
   const [schoolYear, setSchoolYear] = useState(thisYear);
   const [period, setPeriod] = useState<ReportPeriod>(currentReportPeriod());
-  const [busy, setBusy] = useState<"progress" | "transcript" | null>(null);
+  const [busy, setBusy] = useState<"progress" | "transcript" | "diploma" | null>(null);
+  const grad = useGraduationProgress(highSchool ? studentId : undefined);
+  const diplomaReady = highSchool && isDiplomaEligible(grad.progress);
 
-  const run = async (kind: "progress" | "transcript") => {
+  const run = async (kind: "progress" | "transcript" | "diploma") => {
     setBusy(kind);
     try {
       const filename = await downloadStudentPdf(
         kind === "progress"
           ? { kind, student_id: studentId, school_year: schoolYear, period }
-          : { kind, student_id: studentId },
+          : kind === "diploma"
+            ? { kind, student_id: studentId, preview: !diplomaReady && adminView }
+            : { kind, student_id: studentId },
       );
       toast({ title: "Downloaded", description: filename });
     } catch (err) {
@@ -946,7 +962,30 @@ export function StudentRecordsDownloads({
             {busy === "transcript" ? "Building..." : "Transcript"}
           </Button>
         )}
+        {highSchool && (diplomaReady || adminView) && (
+          <Button
+            size="sm"
+            variant={diplomaReady ? "default" : "outline"}
+            disabled={busy !== null || grad.loading}
+            onClick={() => run("diploma")}
+            data-testid="download-diploma"
+            data-marker="MCA_R10_DIPLOMA"
+            title={diplomaReady ? "Graduation requirements met" : "Sample only: stamped NOT YET ELIGIBLE"}
+          >
+            <Download className="h-4 w-4 mr-1.5" />
+            {busy === "diploma" ? "Building..." : diplomaReady ? "Diploma" : "Diploma sample"}
+          </Button>
+        )}
       </div>
+      {highSchool && !diplomaReady && !adminView && grad.progress && (
+        <p className="text-xs text-foreground/60">
+          The diploma download unlocks when all graduation requirements are met ({grad.progress.earned.toFixed(2)} of{" "}
+          {grad.progress.totalRequired.toFixed(0)} credits earned so far).
+        </p>
+      )}
+      {highSchool && diplomaReady && (
+        <p className="text-xs text-green-700">All graduation requirements are met. The diploma is ready to download.</p>
+      )}
     </div>
   );
 }

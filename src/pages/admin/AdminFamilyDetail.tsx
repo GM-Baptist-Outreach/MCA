@@ -1173,6 +1173,7 @@ const AdminFamilyDetail = () => {
                 studentId={student.id}
                 highSchool={student.enrollments.some((e) => e.tuition_tier === "high_school")}
                 compact
+                adminView
               />
               {student.enrollments.some((e) => e.tuition_tier === "high_school") && (
                 <GraduationCreditTracker studentId={student.id} compact />
@@ -1390,17 +1391,171 @@ function reviewName(
 
 const isHeicUrl = (url: string) => /\.(heic|heif)(\?|$)/i.test(url);
 
+type ScoreResult = {
+  slot_id: string | null;
+  slot_status: string | null;
+  passed: boolean;
+  score: number;
+  ace_pace: number;
+  next_ship_date: string | null;
+  pick_list_refreshed: boolean;
+  new_celebrations: string[];
+};
+
+export type ScoringTarget = {
+  id: string;
+  student_name: string;
+  subject_name: string;
+  ace_pace: number;
+  score: string | null;
+  admin_note: string | null;
+  review_status: string;
+};
+
+/**
+ * Round 10 (MCA_R10_VIEWER_SCORING): enter the score while looking at the test
+ * photo. Saving calls mca_score_test, which approves the upload, updates the
+ * student's PACE (passed/failed) and refreshes a paused pick list, so the next
+ * prescription ships with the normal rules.
+ */
+function ViewerScorePanel({ target, onSaved }: { target: ScoringTarget; onSaved?: () => void }) {
+  const { toast } = useToast();
+  const [pace, setPace] = useState(String(target.ace_pace));
+  const [score, setScore] = useState(target.score ?? "");
+  const [note, setNote] = useState(target.admin_note ?? "");
+  const [enteredIntoAce, setEnteredIntoAce] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [result, setResult] = useState<ScoreResult | null>(null);
+  const [reissued, setReissued] = useState(false);
+
+  useEffect(() => {
+    setPace(String(target.ace_pace));
+    setScore(target.score ?? "");
+    setNote(target.admin_note ?? "");
+    setResult(null);
+    setReissued(false);
+  }, [target.id]);
+
+  const save = async () => {
+    const value = score.trim().replace(/%$/, "");
+    if (!value) {
+      toast({ title: "Enter the score first", variant: "destructive" });
+      return;
+    }
+    setSaving(true);
+    const { data, error } = await supabase.rpc("mca_score_test", {
+      p_score_report_id: target.id,
+      p_score: value,
+      p_ace_pace: Number(pace) || null,
+      p_approve: true,
+      p_note: note.trim() || null,
+    });
+    if (!error && enteredIntoAce) {
+      await supabase.from("score_reports").update({ entered_into_ace: true }).eq("id", target.id);
+    }
+    setSaving(false);
+    if (error) {
+      toast({ title: "Couldn't save the score", description: error.message, variant: "destructive" });
+      return;
+    }
+    const r = data as ScoreResult;
+    setResult(r);
+    toast({
+      title: r.passed ? `Saved: ${r.score}% passed` : `Saved: ${r.score}% (below 80%)`,
+      description: r.new_celebrations?.length ? `Milestone: ${r.new_celebrations.join(", ")}` : undefined,
+    });
+    onSaved?.();
+  };
+
+  const reissue = async () => {
+    if (!result?.slot_id) return;
+    const { error } = await supabase.rpc("mca_reissue_pace", { slot_id: result.slot_id });
+    if (error) {
+      toast({ title: "Couldn't re-issue", description: error.message, variant: "destructive" });
+      return;
+    }
+    setReissued(true);
+    toast({ title: `PACE ${result.ace_pace} re-issued`, description: "It goes back on the student's list for a retake." });
+    onSaved?.();
+  };
+
+  return (
+    <div
+      className="absolute bottom-16 right-4 w-80 rounded-xl bg-white p-4 text-black shadow-xl space-y-3"
+      onClick={(event) => event.stopPropagation()}
+      data-testid="viewer-score-panel"
+      data-marker="MCA_R10_VIEWER_SCORING"
+    >
+      <div>
+        <p className="font-semibold">{target.student_name}</p>
+        <p className="text-xs text-gray-600">
+          {target.subject_name} · upload {target.review_status === "pending" ? "waiting for review" : target.review_status}
+        </p>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <label className="text-xs space-y-1">
+          <span className="block text-gray-600">PACE (ACE number)</span>
+          <Input className="h-9" value={pace} onChange={(e) => setPace(e.target.value)} aria-label="PACE number" />
+        </label>
+        <label className="text-xs space-y-1">
+          <span className="block text-gray-600">Score %</span>
+          <Input
+            className="h-9"
+            value={score}
+            inputMode="decimal"
+            placeholder="e.g. 92"
+            onChange={(e) => setScore(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") save();
+            }}
+            aria-label="Score"
+            autoFocus
+          />
+        </label>
+      </div>
+      <Input placeholder="Note to the parent (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
+      <label className="flex items-center gap-2 text-xs">
+        <input type="checkbox" checked={enteredIntoAce} onChange={(e) => setEnteredIntoAce(e.target.checked)} />
+        Also mark "Entered into ACE"
+      </label>
+      <Button type="button" className="w-full" disabled={saving} onClick={save}>
+        {saving ? "Saving..." : "Save score & approve"}
+      </Button>
+      {result && (
+        <div className="rounded-md bg-gray-100 p-2 text-xs space-y-1" data-testid="viewer-score-result">
+          <p>
+            PACE {result.ace_pace}: <strong>{result.passed ? "passed" : "below 80% (retake)"}</strong>
+          </p>
+          {result.next_ship_date && <p>Next box: {new Date(`${result.next_ship_date}T12:00:00`).toLocaleDateString()}</p>}
+          {result.pick_list_refreshed && <p>The paused pick list was rebuilt with the next PACEs.</p>}
+          {result.new_celebrations?.length > 0 && <p>🎉 {result.new_celebrations.join(", ")}</p>}
+          {!result.passed && result.slot_id && (
+            <Button type="button" size="sm" variant="outline" disabled={reissued} onClick={reissue}>
+              {reissued ? "Re-issued" : "Re-issue this PACE for a retake"}
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Full-screen viewer for test-upload photos with prev/next arrows, arrow keys, and a counter. Wraps at the ends. */
 export function TestPhotoViewer({
   urls,
   index,
   onIndexChange,
   onClose,
+  scoring,
+  onScored,
 }: {
   urls: string[];
   index: number;
   onIndexChange: (index: number) => void;
   onClose: () => void;
+  /** Round 10: show the score panel for this upload. */
+  scoring?: ScoringTarget | null;
+  onScored?: () => void;
 }) {
   const count = urls.length;
   const current = count ? ((index % count) + count) % count : 0;
@@ -1413,6 +1568,8 @@ export function TestPhotoViewer({
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      const typing = (event.target as HTMLElement | null)?.closest?.("input, textarea, select");
+      if (typing && event.key !== "Escape") return;
       if (event.key === "ArrowRight") {
         event.preventDefault();
         go(1);
@@ -1496,6 +1653,7 @@ export function TestPhotoViewer({
       >
         {current + 1} of {count}
       </div>
+      {scoring && <ViewerScorePanel target={scoring} onSaved={onScored} />}
     </div>
   );
 }
@@ -1516,7 +1674,7 @@ export function AdminTestReviews({
   const [draftScore, setDraftScore] = useState<Record<string, string>>({});
   const [draftPace, setDraftPace] = useState<Record<string, string>>({});
   const [photos, setPhotos] = useState<Record<string, string[]>>({});
-  const [lightbox, setLightbox] = useState<{ urls: string[]; index: number } | null>(null);
+  const [lightbox, setLightbox] = useState<{ urls: string[]; index: number; row?: ReviewRow } | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -1557,22 +1715,73 @@ export function AdminTestReviews({
     );
   }
 
-  const openPhotos = async (row: ReviewRow) => {
-    if (!row.photo_urls?.length || photos[row.id]) return;
+  const openPhotos = async (row: ReviewRow): Promise<string[]> => {
+    if (!row.photo_urls?.length) return [];
+    if (photos[row.id]) return photos[row.id];
     const signed = await Promise.all(
       row.photo_urls.map(async (path) => {
         const { data } = await supabase.storage.from("test-score-photos").createSignedUrl(path, 300);
         return data?.signedUrl ?? null;
       }),
     );
-    setPhotos((prev) => ({ ...prev, [row.id]: signed.filter((url): url is string => !!url) }));
+    const urls = signed.filter((url): url is string => !!url);
+    setPhotos((prev) => ({ ...prev, [row.id]: urls }));
+    return urls;
   };
+
+  /** Round 10: open the photo with the score panel beside it. */
+  const scoreInViewer = async (row: ReviewRow) => {
+    const urls = await openPhotos(row);
+    if (urls.length === 0) {
+      toast({ title: "No photo to show", description: "Enter the score in the table instead." });
+      return;
+    }
+    setLightbox({ urls, index: 0, row });
+  };
+
+  const scoringTarget = (row: ReviewRow): ScoringTarget => ({
+    id: row.id,
+    student_name: row.students?.student_name ?? "Student",
+    subject_name: reviewName(row.subjects, "name"),
+    ace_pace: row.pace_number > 1000 ? row.pace_number : row.pace_number + 1000,
+    score: draftScore[row.id] ?? row.score,
+    admin_note: note[row.id] ?? row.admin_note,
+    review_status: row.review_status,
+  });
 
   const review = async (
     row: ReviewRow,
     next: "approved" | "rejected",
     enteredIntoAce?: boolean,
   ) => {
+    if (next === "approved") {
+      // Round 10: approving goes through mca_score_test so the PACE, the next
+      // prescription and any milestone update in one step.
+      const score = (draftScore[row.id] ?? row.score ?? "").trim().replace(/%$/, "");
+      if (!score) {
+        toast({ title: "Enter the score first", variant: "destructive" });
+        return;
+      }
+      const { data, error } = await supabase.rpc("mca_score_test", {
+        p_score_report_id: row.id,
+        p_score: score,
+        p_ace_pace: Number(draftPace[row.id] ?? (row.pace_number > 1000 ? row.pace_number : row.pace_number + 1000)) || null,
+        p_approve: true,
+        p_note: (note[row.id] ?? row.admin_note ?? "").trim() || null,
+      });
+      if (error) {
+        toast({ title: "Couldn't approve", description: error.message, variant: "destructive" });
+        return;
+      }
+      if (enteredIntoAce) await supabase.from("score_reports").update({ entered_into_ace: true }).eq("id", row.id);
+      const r = data as ScoreResult;
+      toast({
+        title: r.passed ? `Score approved: ${r.score}% passed` : `Score approved: ${r.score}% (retake)`,
+        description: r.new_celebrations?.length ? `Milestone: ${r.new_celebrations.join(", ")}` : undefined,
+      });
+      load();
+      return;
+    }
     const { data: userData } = await supabase.auth.getUser();
     const { error } = await supabase
       .from("score_reports")
@@ -1602,7 +1811,7 @@ export function AdminTestReviews({
         .eq("subject_id", row.subject_id)
         .eq("pace_number", row.pace_number);
     }
-    toast({ title: next === "approved" ? "Score approved" : "Score rejected" });
+    toast({ title: "Score rejected" });
     load();
   };
 
@@ -1719,9 +1928,21 @@ export function AdminTestReviews({
                       />
                     </td>
                     <td className="p-3">
-                      <Button type="button" size="sm" variant="outline" onClick={() => openPhotos(row)}>
-                        Photos
-                      </Button>
+                      <div className="flex gap-1">
+                        <Button type="button" size="sm" variant="outline" onClick={() => openPhotos(row)}>
+                          Photos
+                        </Button>
+                        {!!row.photo_urls?.length && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={() => scoreInViewer(row)}
+                            data-testid="score-in-viewer"
+                          >
+                            Score
+                          </Button>
+                        )}
+                      </div>
                       <div className="flex gap-1 mt-1">
                         {(photos[row.id] ?? []).map((url, index) =>
                           /\.(heic|heif)(\?|$)/i.test(url) ? (
@@ -1740,7 +1961,7 @@ export function AdminTestReviews({
                               key={url}
                               type="button"
                               aria-label={`Open photo ${index + 1}`}
-                              onClick={() => setLightbox({ urls: photos[row.id] ?? [], index })}
+                              onClick={() => setLightbox({ urls: photos[row.id] ?? [], index, row })}
                             >
                               <img src={url} alt="" className="h-12 w-12 object-cover rounded border" />
                             </button>
@@ -1796,6 +2017,8 @@ export function AdminTestReviews({
           index={lightbox.index}
           onIndexChange={(index) => setLightbox((prev) => (prev ? { ...prev, index } : prev))}
           onClose={() => setLightbox(null)}
+          scoring={lightbox.row ? scoringTarget(lightbox.row) : null}
+          onScored={load}
         />
       )}
     </div>
