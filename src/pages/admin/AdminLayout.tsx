@@ -236,7 +236,7 @@ export interface AdminOutletContext {
 // ---------------------------------------------------------------------------
 
 const HELP_FILES_URL = `${SUPABASE_URL}/storage/v1/object/public/help-center`;
-const HELP_FILES_VERSION = "2026-10-02-r8";
+const HELP_FILES_VERSION = "2026-10-02-r9";
 export const GUIDE_PDF_URL = `${HELP_FILES_URL}/How-MCA-Works.pdf?v=${HELP_FILES_VERSION}`;
 
 const helpShot = (name: string) => `${HELP_FILES_URL}/shots/${name}.jpg?v=${HELP_FILES_VERSION}`;
@@ -688,10 +688,11 @@ export const HELP_ARTICLES: HelpArticle[] = [
     id: "send-feedback",
     title: "How do I send feedback or report a problem?",
     category: "Help and tours",
-    keywords: ["feedback", "bug", "problem", "support", "question", "idea", "screenshot"],
+    keywords: ["feedback", "bug", "problem", "support", "question", "idea", "screenshot", "ticket", "ticket number", "confirmation"],
     body: [
       "Use Send feedback at the bottom of this page. Pick a topic, describe what happened, and attach a screenshot if it helps. Your name, email, and the page you were on are included automatically.",
-      "It goes to our support team, and replies come back to your email.",
+      "Each message gets a ticket number, like #000123. You'll see it on the screen, and a confirmation email with the ticket number and a copy of your message goes to the email you sign in with.",
+      "Support replies by email, straight to you. To add something later, reply to the confirmation email and keep the ticket number in the subject. Recent feedback under the form lists the latest tickets.",
     ],
   },
   {
@@ -756,7 +757,16 @@ function AdminFeedbackForm({ lastPage }: { lastPage: string | null }) {
       if (error || !data?.ok) {
         throw new Error(data?.error ?? "Your feedback couldn't be sent. Please try again.");
       }
-      setResult({ ok: true, text: "Thanks! Your feedback was sent to our support team." });
+      // MCA_R9_TICKETS: show the ticket number and where the confirmation went.
+      const ticket = typeof data.ticket_number === "string" ? data.ticket_number : null;
+      setResult({
+        ok: true,
+        text: `${ticket ? `Thanks! Ticket #${ticket} was sent to our support team.` : "Thanks! Your feedback was sent to our support team."}${
+          data.confirmation_sent && data.confirmation_to
+            ? ` A confirmation is on its way to ${data.confirmation_to}, and support will reply by email.`
+            : " Support will reply by email."
+        }`,
+      });
       setSentCount((n) => n + 1);
       setMessage("");
       setFile(null);
@@ -778,7 +788,8 @@ function AdminFeedbackForm({ lastPage }: { lastPage: string | null }) {
         <h3 className="text-xl font-bold font-serif text-primary">Send feedback</h3>
         <p className="text-sm text-foreground/60">
           Found a problem, have a question, or want something changed? Tell us here. Your name, email,
-          and the page you were on are included.
+          and the page you were on are included. You'll get a ticket number and a confirmation email, and
+          support replies go straight to your email.
         </p>
       </div>
       <form onSubmit={submit} className="space-y-3">
@@ -842,6 +853,7 @@ function AdminFeedbackForm({ lastPage }: { lastPage: string | null }) {
 
 interface FeedbackRow {
   id: string;
+  ticket_number: number | null;
   created_at: string;
   admin_name: string | null;
   topic: string;
@@ -867,7 +879,7 @@ function RecentFeedback({ refreshKey }: { refreshKey: number }) {
   const load = async () => {
     const { data } = await supabase
       .from("admin_feedback")
-      .select("id, created_at, admin_name, topic, email_status, delivery_status")
+      .select("id, ticket_number, created_at, admin_name, topic, email_status, delivery_status")
       .order("created_at", { ascending: false })
       .limit(5);
     setRows((data as FeedbackRow[] | null) ?? []);
@@ -885,6 +897,7 @@ function RecentFeedback({ refreshKey }: { refreshKey: number }) {
         {rows.map((row) => (
           <li key={row.id} className="flex flex-wrap items-center gap-2 text-foreground/70" data-feedback-id={row.id}>
             <span>
+              {row.ticket_number ? `#${String(row.ticket_number).padStart(6, "0")} · ` : ""}
               {new Date(row.created_at).toLocaleString()} · {row.admin_name ?? "Admin"} · {row.topic} ·{" "}
               {row.email_status === "sent"
                 ? DELIVERY_WORDS[row.delivery_status ?? "sent"] ?? row.delivery_status
