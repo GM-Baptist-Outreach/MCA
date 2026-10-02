@@ -104,6 +104,7 @@ export function SpotlightTour({
   onClose,
   name,
   startAt,
+  onStepChange,
 }: {
   open: boolean;
   steps: SpotlightStep[];
@@ -111,6 +112,8 @@ export function SpotlightTour({
   name: string;
   /** Step id to start from (e.g. a Help Center "Show me" button). */
   startAt?: string | null;
+  /** Called when a step opens, before its target is looked up (e.g. to open a phone menu). */
+  onStepChange?: (step: SpotlightStep) => void;
 }) {
   const navigate = useNavigate();
   const [index, setIndex] = useState(0);
@@ -136,6 +139,7 @@ export function SpotlightTour({
     if (!step) return;
     setTarget(null);
     setRect(null);
+    onStepChange?.(step); // MCA_R7_TOUR_STEP_HOOK
     if (step.route && window.location.pathname !== step.route) navigate(step.route);
     const targets = tourTargets(step);
     if (targets.length === 0) {
@@ -149,7 +153,7 @@ export function SpotlightTour({
     const tick = () => {
       const elapsed = Date.now() - started;
       const onRoute = !step.route || window.location.pathname === step.route;
-      // A page redirect (e.g. /admin -> /admin/enrollments) can land after our
+      // A page redirect (e.g. /admin/backorders -> /admin/pick-lists) can land after our
       // navigation; ask again until the step's route sticks.
       if (!onRoute && step.route && Date.now() - lastNavigate > 700) {
         lastNavigate = Date.now();
@@ -238,9 +242,12 @@ export function SpotlightTour({
       top: Math.max(TOUR_MARGIN, (viewport.h - cardSize.h) / 2),
     };
   } else if (small) {
+    // Tall targets (a whole card or the phone menu) are scrolled to their top,
+    // so the card docks at the bottom to keep the start of the target visible.
     const targetMiddle = hole.top + hole.height / 2;
+    const tall = hole.height > viewport.h * 0.6;
     cardStyle =
-      targetMiddle < viewport.h / 2
+      tall || targetMiddle < viewport.h / 2
         ? { left: TOUR_MARGIN, right: TOUR_MARGIN, bottom: TOUR_MARGIN }
         : { left: TOUR_MARGIN, right: TOUR_MARGIN, top: TOUR_MARGIN };
   } else {

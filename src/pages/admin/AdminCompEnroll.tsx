@@ -195,6 +195,13 @@ const AdminCompEnroll = () => {
   return (
     <div className="space-y-6 max-w-3xl">
       <div>
+        <Link
+          to="/admin/families"
+          className="mb-2 inline-block text-sm text-primary hover:underline"
+          data-marker="MCA_R7_BACK_TO_FAMILIES"
+        >
+          ← Back to Families
+        </Link>
         <h2 className="text-2xl font-bold font-serif text-primary mb-2">
           Enroll Without Payment
         </h2>

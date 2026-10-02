@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import { ChevronRight } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -553,11 +555,36 @@ const AdminSettings = () => {
   };
 
   return (
-    <div className="space-y-6 max-w-2xl">
-      <div>
-        <h2 className="text-2xl font-bold font-serif text-primary mb-2" data-tour="admin-settings">
-          Payment Mode (Test/Live)
+    <div className="space-y-8 max-w-2xl" data-marker="MCA_R7_SETTINGS_PAGE">
+      <div className="space-y-3">
+        <h2 className="text-2xl font-bold font-serif text-primary" data-tour="admin-settings">
+          Settings
         </h2>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {[
+            { to: "/admin/emails", title: "Email Templates", note: "Automatic email switches and wording" },
+            { to: "/admin/users", title: "Admin Users", note: "Who can sign in to the admin side" },
+          ].map((card) => (
+            <Link
+              key={card.to}
+              to={card.to}
+              className="group flex items-center justify-between gap-3 rounded-xl border border-border/60 p-4 hover:bg-secondary/60"
+            >
+              <span>
+                <span className="block font-medium text-primary">{card.title}</span>
+                <span className="block text-xs text-foreground/60">{card.note}</span>
+              </span>
+              <ChevronRight className="h-4 w-4 text-foreground/40 group-hover:text-primary" />
+            </Link>
+          ))}
+        </div>
+      </div>
+
+      <div id="payment-mode" className="space-y-6" data-tour="admin-payment-mode">
+      <div>
+        <h3 className="text-xl font-bold font-serif text-primary mb-2">
+          Payment Mode (Test/Live)
+        </h3>
         <p className="text-sm text-foreground/80">
           Leave this on Live. Only switch to Test when a developer is testing
           checkout. While in Test, families cannot actually pay.
@@ -645,6 +672,7 @@ const AdminSettings = () => {
           </CollapsibleContent>
         </Collapsible>
       </section>
+      </div>
 
       <AlertDialog
         open={pendingMode !== null}

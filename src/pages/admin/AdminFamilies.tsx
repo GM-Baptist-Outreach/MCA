@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/lib/supabaseClient";
 import { Input } from "@/components/ui/input";
-import { ChevronRight } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { ChevronRight, UserPlus } from "lucide-react";
 
 interface FamilyRow {
   id: string;
@@ -73,7 +74,15 @@ const AdminFamilies = () => {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-2xl font-bold font-serif text-primary">Families</h2>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <h2 className="text-2xl font-bold font-serif text-primary">Families</h2>
+        <Button asChild variant="outline" data-tour="admin-enroll-comp">
+          <Link to="/admin/enroll-comp" data-marker="MCA_R7_ENROLL_COMP_BUTTON">
+            <UserPlus className="h-4 w-4 mr-1.5" />
+            Enroll Without Payment
+          </Link>
+        </Button>
+      </div>
 
       <Input
         placeholder="Search parent name, email, phone..."

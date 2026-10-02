@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { supabase } from "@/lib/supabaseClient";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -206,7 +207,65 @@ function relText(
   return row?.[key] ?? "";
 }
 
+// ---------------------------------------------------------------------------
+// MCA_R7_PICK_LIST_TABS: Pick Lists has two tabs, Pick lists and Backordered.
+// /admin/backorders redirects to /admin/pick-lists?tab=backordered.
+// ---------------------------------------------------------------------------
 export default function AdminPickLists() {
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("tab") === "backordered" ? "backordered" : "lists";
+  const [openBackorders, setOpenBackorders] = useState<number | null>(null);
+
+  useEffect(() => {
+    supabase
+      .from("admin_backordered_items_v")
+      .select("line_id", { count: "exact", head: true })
+      .is("backorder_fulfilled_at", null)
+      .then(({ count, error }) => setOpenBackorders(error ? null : count ?? 0));
+  }, [tab]);
+
+  const choose = (next: "lists" | "backordered") => {
+    const updated = new URLSearchParams(params);
+    if (next === "backordered") updated.set("tab", "backordered");
+    else updated.delete("tab");
+    setParams(updated, { replace: true });
+  };
+
+  const tabClass = (active: boolean) =>
+    `-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
+      active ? "border-primary text-primary" : "border-transparent text-foreground/60 hover:text-foreground"
+    }`;
+
+  return (
+    <div className="space-y-6 print:space-y-4" data-marker="MCA_R7_PICK_LIST_TABS">
+      <div className="flex gap-1 border-b border-border/60 print:hidden" role="tablist" aria-label="Pick Lists">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "lists"}
+          className={tabClass(tab === "lists")}
+          onClick={() => choose("lists")}
+          data-tour="admin-pick-lists-tab"
+        >
+          Pick lists
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "backordered"}
+          className={tabClass(tab === "backordered")}
+          onClick={() => choose("backordered")}
+          data-tour="admin-backorders-tab"
+        >
+          Backordered{openBackorders ? ` (${openBackorders})` : ""}
+        </button>
+      </div>
+      {tab === "backordered" ? <AdminBackorders /> : <PickListsPanel />}
+    </div>
+  );
+}
+
+function PickListsPanel() {
   const { toast } = useToast();
   const [lists, setLists] = useState<PickList[]>([]);
   const [loading, setLoading] = useState(true);

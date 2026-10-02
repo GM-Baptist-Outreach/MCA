@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
+  Link,
   NavLink,
   Navigate,
   Outlet,
@@ -7,7 +8,18 @@ import {
   useNavigate,
   useOutletContext,
 } from "react-router-dom";
-import { ChevronDown, ChevronRight, Download, PlayCircle, Search } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Download,
+  HelpCircle,
+  LogOut,
+  Menu,
+  PlayCircle,
+  RefreshCw,
+  Search,
+  X,
+} from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,15 +39,34 @@ const SUPABASE_URL = "https://proiyioqfbjcmprsnqhf.supabase.co";
 // MCA_R6_ADMIN_TOUR: interactive spotlight walkthrough of the admin side.
 // Uses the shared SpotlightTour engine from PortalLayout.tsx. Dismissal is
 // stored per admin in admin_users.tour_dismissed_at, with this browser's
-// localStorage as a fast cache and fallback. "Tour" in the nav replays it,
+// localStorage as a fast cache and fallback. "Replay tour" in the sidebar replays it,
 // and Help Center articles can start it at a matching step ("Show me").
 // ---------------------------------------------------------------------------
 
 const ADMIN_TOUR_STORAGE_PREFIX = "mca_admin_tour_dismissed_v1:";
 
+// Steps that point at the sidebar. On a phone the menu is a drawer, so
+// AdminLayout opens it while one of these steps is showing.
+export const ADMIN_MENU_TOUR_STEPS = new Set(["sidebar", "tour-button"]);
+
 export function adminTourSteps(familyId: string | null): SpotlightStep[] {
   const familyRoute = familyId ? `${ADMIN_ROUTE}/families/${familyId}` : null;
   const steps: SpotlightStep[] = [
+    {
+      id: "dashboard",
+      title: "Today: your dashboard",
+      body:
+        "The admin side opens here. Each box is a live count with a link: tests to review, pick lists ready and coming up, backorders, new enrollments this week, and store orders to fulfill.",
+      route: ADMIN_ROUTE,
+      target: ["admin-dashboard"],
+    },
+    {
+      id: "sidebar",
+      title: "The menu",
+      body:
+        "Everything is grouped here: Today, Students, Shipping, Store, and Settings. Help and Replay tour are at the bottom. On a phone, tap the menu button at the top to open it.",
+      target: ["admin-sidebar", "admin-menu-button"],
+    },
     {
       id: "families",
       title: "Families",
@@ -43,6 +74,14 @@ export function adminTourSteps(familyId: string | null): SpotlightStep[] {
         "Every family is listed here. Search by name, email, or phone, then click View to open a family.",
       route: `${ADMIN_ROUTE}/families`,
       target: ["admin-family-view", "admin-families-list"],
+    },
+    {
+      id: "enroll-comp",
+      title: "Enroll Without Payment",
+      body:
+        "To add a family and student when no card payment is needed (a scholarship or staff family), use this button on the Families page.",
+      route: `${ADMIN_ROUTE}/families`,
+      target: ["admin-enroll-comp"],
     },
   ];
   if (familyRoute) {
@@ -75,6 +114,14 @@ export function adminTourSteps(familyId: string | null): SpotlightStep[] {
   }
   steps.push(
     {
+      id: "test-reviews",
+      title: "Test Reviews",
+      body:
+        "Tests that parents upload land here, and the menu shows how many are waiting. Check the photos and score, then approve or reject with a note. Approved scores fill in the student's PACEs.",
+      route: `${ADMIN_ROUTE}/test-reviews`,
+      target: ["admin-test-reviews"],
+    },
+    {
       id: "pick-lists",
       title: "Pick Lists",
       body:
@@ -91,20 +138,12 @@ export function adminTourSteps(familyId: string | null): SpotlightStep[] {
       target: ["admin-packing-lists"],
     },
     {
-      id: "inventory",
-      title: "Inventory",
+      id: "backorders",
+      title: "Backordered",
       body:
-        "Click Edit on any item to change its details, photo, or whether it shows in the store. Use Price for a quick price change.",
-      route: `${ADMIN_ROUTE}/inventory`,
-      target: ["admin-inventory-edit", "admin-inventory"],
-    },
-    {
-      id: "test-reviews",
-      title: "Test Reviews",
-      body:
-        "Tests that parents upload land here. Check the photos and score, then approve or reject with a note. Approved scores fill in the student's PACEs.",
-      route: `${ADMIN_ROUTE}/test-reviews`,
-      target: ["admin-test-reviews"],
+        "Backordered items are a tab inside Pick Lists. It lists every pick-list or store line that was short, so you can reorder and mark each one fulfilled when it goes out.",
+      route: `${ADMIN_ROUTE}/pick-lists`,
+      target: ["admin-backorders-tab"],
     },
     {
       id: "orders",
@@ -113,6 +152,14 @@ export function adminTourSteps(familyId: string | null): SpotlightStep[] {
         "Every store order is listed here with its status. Print a packing list, and mark a shipped order Fulfilled to send the family their tracking email.",
       route: `${ADMIN_ROUTE}/orders`,
       target: ["admin-orders"],
+    },
+    {
+      id: "inventory",
+      title: "Inventory Pricing",
+      body:
+        "Click Edit on any item to change its details, photo, or whether it shows in the store. Use Price for a quick price change. Subscription Plans sits right below it in the menu.",
+      route: `${ADMIN_ROUTE}/inventory`,
+      target: ["admin-inventory-edit", "admin-inventory"],
     },
     {
       id: "emails",
@@ -124,11 +171,11 @@ export function adminTourSteps(familyId: string | null): SpotlightStep[] {
     },
     {
       id: "settings",
-      title: "Settings",
+      title: "Settings and Payment Mode",
       body:
-        "This page holds the payment mode. Leave it on Live: test mode is only for a developer trying out checkout.",
+        "Settings links to Email Templates and Admin Users, and holds the Payment Mode section. Leave payments on Live: test mode is only for a developer trying out checkout.",
       route: `${ADMIN_ROUTE}/settings`,
-      target: ["admin-settings"],
+      target: ["admin-payment-mode", "admin-settings"],
     },
     {
       id: "help",
@@ -141,8 +188,8 @@ export function adminTourSteps(familyId: string | null): SpotlightStep[] {
     {
       id: "tour-button",
       title: "Watch this again any time",
-      body: "Click Tour in the menu to replay this walkthrough.",
-      target: ["admin-tour-button"],
+      body: "Click Replay tour at the bottom of the menu to see this walkthrough again.",
+      target: ["admin-tour-button", "admin-menu-button"],
     },
   );
   return steps;
@@ -164,17 +211,19 @@ export interface AdminOutletContext {
 // ---------------------------------------------------------------------------
 
 const HELP_FILES_URL = `${SUPABASE_URL}/storage/v1/object/public/help-center`;
-const HELP_FILES_VERSION = "2026-10-01";
+const HELP_FILES_VERSION = "2026-10-02";
 export const GUIDE_PDF_URL = `${HELP_FILES_URL}/How-MCA-Works.pdf?v=${HELP_FILES_VERSION}`;
 
 const helpShot = (name: string) => `${HELP_FILES_URL}/shots/${name}.jpg?v=${HELP_FILES_VERSION}`;
 
 export const HELP_CATEGORIES = [
+  "Getting around",
   "Parents",
   "Families",
   "Shipping",
   "Store",
   "Emails",
+  "Settings",
   "Automatic jobs",
   "Help and tours",
 ] as const;
@@ -193,6 +242,32 @@ export interface HelpArticle {
 }
 
 export const HELP_ARTICLES: HelpArticle[] = [
+  // ----- Getting around (MCA_R7_ADMIN_NAV)
+  {
+    id: "dashboard",
+    title: "What's on the Today dashboard?",
+    category: "Getting around",
+    keywords: ["dashboard", "today", "home", "counts", "start page", "landing"],
+    body: [
+      "The admin side opens on Today, a dashboard of live counts: tests waiting for review, pick lists ready to pack and boxes due in the next 14 days, open backorders, new enrollments in the last 7 days, and store orders to fulfill.",
+      "Click any box to jump to that list. The counts refresh each time you open the dashboard, and Refresh updates them on the spot.",
+    ],
+    image: { src: helpShot("r7-dashboard"), alt: "The Today dashboard" },
+    tourStep: "dashboard",
+  },
+  {
+    id: "menu",
+    title: "Where is everything in the menu?",
+    category: "Getting around",
+    keywords: ["menu", "sidebar", "navigation", "where", "moved", "phone", "hamburger", "backordered", "payment mode"],
+    body: [
+      "The menu on the left is grouped. Today: the dashboard. Students: Families, Current Enrollments, Test Reviews (with a count of tests waiting). Shipping: Pick Lists and Store Orders. Store: Inventory Pricing and Subscription Plans. Settings: Email Templates, Admin Users, and Settings.",
+      "A few things moved: Backordered is now a tab inside Pick Lists, Payment Mode is a section of the Settings page, and Enroll Without Payment is a button on the Families page. Help, Replay tour, and Log Out are at the bottom of the menu.",
+      "On a phone, the menu is hidden behind the menu button (three lines) at the top left. Tap it to open the menu, and tap a page or outside the menu to close it.",
+    ],
+    image: { src: helpShot("r7-sidebar"), alt: "The grouped admin menu" },
+    tourStep: "sidebar",
+  },
   // ----- Parents
   {
     id: "family-enrolls",
@@ -258,7 +333,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "For high school students, Academic Projection shows completed courses, current courses, and what's still needed to graduate, with credits. The tab only appears in the portal when a high school student is selected.",
       "Staff open the same page from the student's card, with tools to customize requirements and add transfer credits.",
     ],
-    image: { src: helpShot("p07-projection"), alt: "Academic Projection" },
+    image: { src: helpShot("r7-projection"), alt: "Academic Projection" },
   },
   {
     id: "submitted-forms",
@@ -281,7 +356,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Open Families, search by parent name, email, or phone, and click View.",
       "The family page has a card for each student with their enrollment, PACEs (Logged courses), ship schedule, form submissions, test reviews, and store orders.",
     ],
-    image: { src: helpShot("a01-families"), alt: "Families list" },
+    image: { src: helpShot("r7-families-list"), alt: "Families list" },
     tourStep: "families",
   },
   {
@@ -293,7 +368,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "On the student's card, click Prescribe all core subjects. For an elementary student, pick one level for Math, English, Word Building, Science and Social Studies, then change or skip any subject. For a high school student, check the courses to add.",
       "This creates the student's PACEs for the year, but nothing ships yet: the daily pick-list job picks up the next PACEs a week before each ship date. To set up next year early for one student, use Prescribe next 12.",
     ],
-    image: { src: helpShot("a03-prescribe-all"), alt: "The Prescribe All panel" },
+    image: { src: helpShot("r7-prescribe-all"), alt: "The Prescribe All panel" },
     tourStep: "prescribe-all",
   },
   {
@@ -315,7 +390,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Every test a parent uploads shows up in Test Reviews, and the menu shows a count when some are waiting. Open one to see the photos and score, then approve or reject it with a note.",
       "Approved scores fill in the student's PACEs automatically. ACE remains the official grade record.",
     ],
-    image: { src: helpShot("a07-test-reviews"), alt: "Test Reviews" },
+    image: { src: helpShot("r7-test-reviews"), alt: "Test Reviews" },
     tourStep: "test-reviews",
   },
   {
@@ -324,8 +399,11 @@ export const HELP_ARTICLES: HelpArticle[] = [
     category: "Families",
     keywords: ["enroll without payment", "comp", "scholarship", "free", "manual enrollment"],
     body: [
-      "Use Enroll Without Payment in the admin menu to add a family and student when no card payment is needed. The family gets the same Parent Portal access as a paying family.",
+      "Open Families and click the Enroll Without Payment button at the top of the page. Fill in the family and student the same way as a normal enrollment; no card payment is taken.",
+      "The family gets the same Parent Portal access as a paying family.",
     ],
+    image: { src: helpShot("r7-families"), alt: "Families with the Enroll Without Payment button" },
+    tourStep: "enroll-comp",
   },
   // ----- Shipping
   {
@@ -337,7 +415,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "On the student's card, pick a Ship mode: fixed quarter dates, every 8 weeks, or Annual Ship. Dates can be rebuilt from the school start date. Click Save schedule after a change.",
       "Annual Ship sends every PACE for the year in one box and is the default for annual payers. It skips the missing-scores pause, since there's no later shipment to hold back.",
     ],
-    image: { src: helpShot("a04-ship-schedule"), alt: "Ship mode and dates" },
+    image: { src: helpShot("r7-ship-schedule"), alt: "Ship mode and dates" },
     tourStep: "ship-schedule",
   },
   {
@@ -360,7 +438,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Pick Lists shows each upcoming shipment and exactly what to pull. Packing list prints one page per family with the ship-to address; Packing lists, all ready prints them all at once.",
       "When the box goes out, click Mark shipped and paste the tracking number if you have one. The family gets the shipping email if it's turned on under Email Templates.",
     ],
-    image: { src: helpShot("a05-pick-lists"), alt: "A shipped pick list" },
+    image: { src: helpShot("r7-pick-lists"), alt: "A shipped pick list" },
     tourStep: "packing-lists",
   },
   {
@@ -370,8 +448,10 @@ export const HELP_ARTICLES: HelpArticle[] = [
     keywords: ["backordered", "out of stock", "short", "stock"],
     body: [
       "When something runs out, it shows as backordered on pick lists and store orders. A backordered line still prints and ships with the rest of the list.",
-      "The Backordered page lists every short line so you can reorder and follow up.",
+      "Open Pick Lists and click the Backordered tab. It lists every short pick-list and store line; filter Open, Fulfilled, or All, and click Mark fulfilled when the item finally goes out.",
     ],
+    image: { src: helpShot("r7-backordered"), alt: "The Backordered tab in Pick Lists" },
+    tourStep: "backorders",
   },
   // ----- Store
   {
@@ -380,10 +460,10 @@ export const HELP_ARTICLES: HelpArticle[] = [
     category: "Store",
     keywords: ["inventory", "price", "edit item", "photo", "stock", "take inventory", "csv"],
     body: [
-      "Inventory Pricing is the full catalog. Search or filter, then use Edit for details and photos, Price for a quick price change, or Take Inventory to set stock on hand. Import and Export CSV handle big updates.",
+      "Inventory Pricing (in the Store group of the menu) is the full catalog. Search or filter, then use Edit for details and photos, Price for a quick price change, or Take Inventory to set stock on hand. Import and Export CSV handle big updates.",
       "Changes show in the store right away.",
     ],
-    image: { src: helpShot("a06-inventory"), alt: "Inventory Pricing" },
+    image: { src: helpShot("r7-inventory"), alt: "Inventory Pricing" },
     tourStep: "inventory",
   },
   {
@@ -395,20 +475,30 @@ export const HELP_ARTICLES: HelpArticle[] = [
       "Store Orders lists every order with its status. Use Print packing list to pack it.",
       "For a ship-to-home order, mark it Fulfilled when it ships and add the tracking number; the customer gets a shipping email if shipping emails are on.",
     ],
-    image: { src: helpShot("a11-orders"), alt: "Store Orders" },
+    image: { src: helpShot("r7-orders"), alt: "Store Orders" },
     tourStep: "orders",
   },
   {
     id: "payment-mode",
     title: "What is Payment Mode, and should I change it?",
-    category: "Store",
+    category: "Settings",
     keywords: ["payment mode", "live", "test mode", "settings", "stripe", "cards"],
     body: [
-      "Payment Mode (Test/Live) is a single switch for card payments and shipping rates. It's set to Live, which means real charges.",
+      "Open Settings (in the Settings group of the menu). Payment Mode (Test/Live) is a section on that page: a single switch for card payments and shipping rates. It's set to Live, which means real charges.",
       "Leave it on Live. Test mode is only for a developer trying out checkout with fake cards, and should never be on while families are using the site.",
     ],
-    image: { src: helpShot("a10-settings"), alt: "Payment Mode settings" },
+    image: { src: helpShot("r7-settings"), alt: "Settings with the Payment Mode section" },
     tourStep: "settings",
+  },
+  {
+    id: "admin-users",
+    title: "How do I add or remove an admin?",
+    category: "Settings",
+    keywords: ["admin users", "add admin", "staff", "remove admin", "access"],
+    body: [
+      "Open Admin Users in the Settings group of the menu. Enter the person's email (and name if you like) and click Add Admin. Anyone added gets full access to everything on the admin side.",
+      "Removing someone only takes away their admin access; it doesn't delete their account. You can't remove your own access; another admin has to do it.",
+    ],
   },
   // ----- Emails
   {
@@ -417,9 +507,9 @@ export const HELP_ARTICLES: HelpArticle[] = [
     category: "Emails",
     keywords: ["email templates", "wording", "edit email", "preview", "send test"],
     body: [
-      "Open Email Templates, pick a template, and edit the subject and body. Check the preview, and use Send test to me before saving.",
+      "Open Email Templates (in the Settings group of the menu), pick a template, and edit the subject and body. Check the preview, and use Send test to me before saving.",
     ],
-    image: { src: helpShot("a08-email-templates"), alt: "Email Templates" },
+    image: { src: helpShot("r7-email-templates"), alt: "Email Templates" },
     tourStep: "emails",
   },
   {
@@ -491,10 +581,10 @@ export const HELP_ARTICLES: HelpArticle[] = [
     category: "Help and tours",
     keywords: ["tour", "walkthrough", "replay", "spotlight", "show me"],
     body: [
-      "Click Tour in the admin menu. It highlights each main tool in order, switching pages for you. It shows once automatically for each admin, and you can skip it any time.",
+      "Click Replay tour at the bottom of the admin menu. It starts on the Today dashboard and the menu, then highlights each main tool in order, switching pages for you. It shows once automatically for each admin, and you can skip it any time.",
       "Articles in this Help Center with a Show me button start the tour at the matching spot.",
     ],
-    image: { src: helpShot("r6-admin-tour"), alt: "The admin tour highlighting Pick Lists" },
+    image: { src: helpShot("r7-admin-tour"), alt: "The admin tour highlighting the menu" },
     tourStep: "tour-button",
   },
   {
@@ -935,6 +1025,393 @@ export function AdminHelp() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// MCA_R7_DASHBOARD: the "Today" home page at /admin (the default admin
+// landing page). Live counts, each linking to the page where the work is.
+// It lives in this file because AI Studio can only edit existing files.
+// ---------------------------------------------------------------------------
+
+interface DashboardCounts {
+  testsToReview: number;
+  pickListsReady: number;
+  pickListsPaused: number;
+  upcomingShipments: number;
+  backorders: number;
+  newEnrollments: number;
+  ordersToFulfill: number;
+}
+
+interface RecentEnrollment {
+  id: string;
+  created_at: string;
+  student: string;
+  parent: string;
+  test: boolean;
+}
+
+const DASHBOARD_UPCOMING_DAYS = 14;
+
+function isoDay(offsetDays = 0): string {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  return d.toLocaleDateString("en-CA");
+}
+
+async function countRows(query: PromiseLike<{ count: number | null; error: unknown }>): Promise<number | null> {
+  const { count, error } = await query;
+  if (error) {
+    console.error("Dashboard count failed", error);
+    return null;
+  }
+  return count ?? 0;
+}
+
+export function AdminDashboard() {
+  const context = useOutletContext<AdminOutletContext | undefined>();
+  const [counts, setCounts] = useState<Partial<Record<keyof DashboardCounts, number | null>>>({});
+  const [recent, setRecent] = useState<RecentEnrollment[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadedAt, setLoadedAt] = useState<Date | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const head = { count: "exact" as const, head: true };
+    const [testsToReview, pickListsReady, pickListsPaused, upcomingShipments, backorders, newEnrollments, ordersToFulfill, recentRows] =
+      await Promise.all([
+        countRows(supabase.from("score_reports").select("id", head).eq("review_status", "pending")),
+        countRows(supabase.from("pick_lists").select("id", head).eq("status", "ready")),
+        countRows(supabase.from("pick_lists").select("id", head).eq("status", "paused")),
+        countRows(
+          supabase
+            .from("student_ship_schedules")
+            .select("id", head)
+            .not("next_ship_date", "is", null)
+            .lte("next_ship_date", isoDay(DASHBOARD_UPCOMING_DAYS))
+            .or("shipment_paused.is.null,shipment_paused.eq.false"),
+        ),
+        countRows(supabase.from("admin_backordered_items_v").select("line_id", head).is("backorder_fulfilled_at", null)),
+        countRows(supabase.from("enrollments").select("id", head).gte("created_at", weekAgo)),
+        countRows(
+          supabase
+            .from("orders")
+            .select("id", head)
+            .in("status", ["submitted", "confirmed"])
+            .neq("payment_status", "refunded"),
+        ),
+        supabase
+          .from("enrollments")
+          .select("id, created_at, students ( student_name, families ( parent_name, is_test_account ) )")
+          .gte("created_at", weekAgo)
+          .order("created_at", { ascending: false })
+          .limit(5),
+      ]);
+    setCounts({ testsToReview, pickListsReady, pickListsPaused, upcomingShipments, backorders, newEnrollments, ordersToFulfill });
+    type One<T> = T | T[] | null | undefined;
+    const first = <T,>(rel: One<T>): T | undefined => (Array.isArray(rel) ? rel[0] : rel ?? undefined);
+    type RecentRow = {
+      id: string;
+      created_at: string;
+      students: One<{ student_name: string | null; families: One<{ parent_name: string | null; is_test_account: boolean | null }> }>;
+    };
+    const rows = ((recentRows.data as unknown as RecentRow[] | null) ?? []).map((row) => {
+      const student = first(row.students);
+      const family = first(student?.families);
+      return {
+        id: row.id,
+        created_at: row.created_at,
+        student: student?.student_name ?? "Student",
+        parent: family?.parent_name ?? "",
+        test: !!family?.is_test_account,
+      };
+    });
+    setRecent(rows);
+    setLoadedAt(new Date());
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const show = (value: number | null | undefined) => (loading && value === undefined ? "…" : value == null ? "–" : String(value));
+
+  const cards: Array<{
+    key: string;
+    label: string;
+    value: number | null | undefined;
+    note: string;
+    to: string;
+    tour: string;
+  }> = [
+    {
+      key: "tests",
+      label: "Tests to review",
+      value: counts.testsToReview,
+      note: "Uploaded by parents, waiting for approval",
+      to: `${ADMIN_ROUTE}/test-reviews`,
+      tour: "admin-dash-tests",
+    },
+    {
+      key: "ready",
+      label: "Pick lists ready",
+      value: counts.pickListsReady,
+      note:
+        counts.pickListsPaused
+          ? `Ready to pack and ship · ${counts.pickListsPaused} paused for missing scores`
+          : "Ready to pack and ship",
+      to: `${ADMIN_ROUTE}/pick-lists`,
+      tour: "admin-dash-pick-lists",
+    },
+    {
+      key: "upcoming",
+      label: "Boxes coming up",
+      value: counts.upcomingShipments,
+      note: `Students with a ship date in the next ${DASHBOARD_UPCOMING_DAYS} days (lists build 7 days ahead)`,
+      to: `${ADMIN_ROUTE}/pick-lists`,
+      tour: "admin-dash-upcoming",
+    },
+    {
+      key: "backorders",
+      label: "Backorders",
+      value: counts.backorders,
+      note: "Open backordered lines on pick lists and store orders",
+      to: `${ADMIN_ROUTE}/pick-lists?tab=backordered`,
+      tour: "admin-dash-backorders",
+    },
+    {
+      key: "enrollments",
+      label: "New enrollments",
+      value: counts.newEnrollments,
+      note: "In the last 7 days",
+      to: `${ADMIN_ROUTE}/enrollments`,
+      tour: "admin-dash-enrollments",
+    },
+    {
+      key: "orders",
+      label: "Store orders to fulfill",
+      value: counts.ordersToFulfill,
+      note: "Submitted or confirmed, not yet fulfilled",
+      to: `${ADMIN_ROUTE}/orders`,
+      tour: "admin-dash-orders",
+    },
+  ];
+
+  return (
+    <div className="space-y-6" data-marker="MCA_R7_DASHBOARD">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h2 className="text-2xl font-bold font-serif text-primary">Today</h2>
+          <p className="text-sm text-foreground/60">
+            {new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}
+            {loadedAt ? ` · updated ${loadedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}
+          </p>
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          <Button type="button" variant="outline" size="sm" onClick={load} disabled={loading}>
+            <RefreshCw className={`h-4 w-4 mr-1.5 ${loading ? "animate-spin" : ""}`} />
+            Refresh
+          </Button>
+          {context && (
+            <Button type="button" variant="outline" size="sm" onClick={() => context.startTour()}>
+              <PlayCircle className="h-4 w-4 mr-1.5" />
+              Take the tour
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3" data-tour="admin-dashboard">
+        {cards.map((card) => {
+          const busy = (card.value ?? 0) > 0;
+          return (
+            <Link
+              key={card.key}
+              to={card.to}
+              data-tour={card.tour}
+              data-dashboard-count={card.key}
+              className={`group rounded-xl border p-4 transition-colors hover:bg-secondary/60 ${
+                busy ? "border-primary/40 bg-primary/5" : "border-border/60 bg-background"
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-medium text-foreground/70">{card.label}</p>
+                <ChevronRight className="h-4 w-4 text-foreground/40 group-hover:text-primary" />
+              </div>
+              <p className={`mt-1 text-3xl font-bold font-serif ${busy ? "text-primary" : "text-foreground/50"}`}>
+                {show(card.value)}
+              </p>
+              <p className="mt-1 text-xs text-foreground/60">{card.note}</p>
+            </Link>
+          );
+        })}
+      </div>
+
+      <section className="rounded-xl border border-border/60 p-4 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="font-serif text-lg font-bold text-primary">New this week</h3>
+          <Link to={`${ADMIN_ROUTE}/enrollments`} className="text-sm text-primary hover:underline">
+            All enrollments
+          </Link>
+        </div>
+        {recent.length === 0 ? (
+          <p className="text-sm text-foreground/60">{loading ? "Loading..." : "No new enrollments in the last 7 days."}</p>
+        ) : (
+          <ul className="divide-y divide-border/50 text-sm">
+            {recent.map((row) => (
+              <li key={row.id} className="flex justify-between gap-3 py-2">
+                <span>
+                  {row.student}
+                  {row.parent ? <span className="text-foreground/60"> · {row.parent}</span> : null}
+                  {row.test ? (
+                    <span className="ml-2 rounded bg-secondary px-1.5 py-0.5 text-[11px] text-foreground/60">test account</span>
+                  ) : null}
+                </span>
+                <span className="text-foreground/60">{new Date(row.created_at).toLocaleDateString()}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MCA_R7_ADMIN_NAV: grouped left sidebar. On phones it's a drawer opened from
+// the menu button in the top bar.
+// ---------------------------------------------------------------------------
+
+interface AdminNavItem {
+  to: string;
+  label: string;
+  end?: boolean;
+  badge?: number;
+}
+
+function adminNavGroups(pendingReviews: number): Array<{ title: string; tour: string; items: AdminNavItem[] }> {
+  return [
+    { title: "Today", tour: "admin-nav-today", items: [{ to: ADMIN_ROUTE, label: "Dashboard", end: true }] },
+    {
+      title: "Students",
+      tour: "admin-nav-students",
+      items: [
+        { to: `${ADMIN_ROUTE}/families`, label: "Families" },
+        { to: `${ADMIN_ROUTE}/enrollments`, label: "Current Enrollments" },
+        { to: `${ADMIN_ROUTE}/test-reviews`, label: "Test Reviews", badge: pendingReviews },
+      ],
+    },
+    {
+      title: "Shipping",
+      tour: "admin-nav-shipping",
+      items: [
+        { to: `${ADMIN_ROUTE}/pick-lists`, label: "Pick Lists" },
+        { to: `${ADMIN_ROUTE}/orders`, label: "Store Orders" },
+      ],
+    },
+    {
+      title: "Store",
+      tour: "admin-nav-store",
+      items: [
+        { to: `${ADMIN_ROUTE}/inventory`, label: "Inventory Pricing" },
+        { to: `${ADMIN_ROUTE}/plans`, label: "Subscription Plans" },
+      ],
+    },
+    {
+      title: "Settings",
+      tour: "admin-nav-settings",
+      items: [
+        { to: `${ADMIN_ROUTE}/emails`, label: "Email Templates" },
+        { to: `${ADMIN_ROUTE}/users`, label: "Admin Users" },
+        { to: `${ADMIN_ROUTE}/settings`, label: "Settings" },
+      ],
+    },
+  ];
+}
+
+function AdminSidebarNav({
+  pendingReviews,
+  onNavigate,
+  onReplayTour,
+  onLogout,
+}: {
+  pendingReviews: number;
+  onNavigate: () => void;
+  onReplayTour: () => void;
+  onLogout: () => void;
+}) {
+  const linkClass = ({ isActive }: { isActive: boolean }) =>
+    `flex items-center justify-between gap-2 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+      isActive ? "bg-primary text-primary-foreground" : "text-foreground/75 hover:bg-secondary"
+    }`;
+  return (
+    <div className="flex h-full flex-col">
+      <nav className="flex-1 space-y-4 overflow-y-auto px-3 py-4" aria-label="Admin">
+        {adminNavGroups(pendingReviews).map((group) => (
+          <div key={group.title} data-tour={group.tour}>
+            <p className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-foreground/45">
+              {group.title}
+            </p>
+            <div className="space-y-0.5">
+              {group.items.map((item) => (
+                <NavLink key={item.to} to={item.to} end={item.end} className={linkClass} onClick={onNavigate}>
+                  {({ isActive }) => (
+                    <>
+                      <span>{item.label}</span>
+                      {item.badge ? (
+                        <span
+                          className={`min-w-[1.5rem] rounded-full px-1.5 text-center text-xs font-semibold ${
+                            isActive ? "bg-primary-foreground text-primary" : "bg-primary text-primary-foreground"
+                          }`}
+                          aria-label={`${item.badge} waiting`}
+                          data-marker="MCA_R7_REVIEW_BADGE"
+                        >
+                          {item.badge}
+                        </span>
+                      ) : null}
+                    </>
+                  )}
+                </NavLink>
+              ))}
+            </div>
+          </div>
+        ))}
+      </nav>
+      <div className="space-y-1 border-t border-border/50 px-3 py-3">
+        <NavLink to={`${ADMIN_ROUTE}/help`} className={linkClass} onClick={onNavigate} data-tour="admin-nav-help">
+          <span className="flex items-center gap-2">
+            <HelpCircle className="h-4 w-4" />
+            Help
+          </span>
+        </NavLink>
+        <button
+          type="button"
+          onClick={onReplayTour}
+          className="block px-3 py-1 text-xs text-foreground/60 underline-offset-2 hover:text-primary hover:underline"
+          data-marker="MCA_R6_ADMIN_TOUR_LINK"
+          data-tour="admin-tour-button"
+          title="Replay the admin tour"
+        >
+          Replay tour
+        </button>
+        <button
+          type="button"
+          onClick={onLogout}
+          className="flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium text-foreground/75 hover:bg-secondary"
+        >
+          <LogOut className="h-4 w-4" />
+          Log Out
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Phone layout (matches Tailwind's md breakpoint).
+function isPhoneWidth(): boolean {
+  return window.innerWidth < 768;
+}
+
 const AdminLayout = () => {
   const [checking, setChecking] = useState(true);
   const [session, setSession] = useState<any>(null);
@@ -943,6 +1420,7 @@ const AdminLayout = () => {
   const [tourOpen, setTourOpen] = useState(false);
   const [tourStart, setTourStart] = useState<string | null>(null);
   const [tourFamilyId, setTourFamilyId] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   // Admin tour dismissal (admin_users.tour_dismissed_at for this admin).
   const [adminRowId, setAdminRowId] = useState<string | null>(null);
   const [tourSavedToAccount, setTourSavedToAccount] = useState(false);
@@ -1026,6 +1504,7 @@ const AdminLayout = () => {
 
   const closeTour = () => {
     setTourOpen(false);
+    setMenuOpen(false);
     const userId = session?.user?.id;
     if (!userId) return;
     const at = new Date().toISOString();
@@ -1075,95 +1554,98 @@ const AdminLayout = () => {
     );
   }
 
-  const navLinkClass = ({ isActive }: { isActive: boolean }) =>
-    `px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-      isActive
-        ? "bg-primary text-primary-foreground"
-        : "text-foreground/70 hover:bg-secondary"
-    }`;
-
   const outletContext: AdminOutletContext = {
     startTour,
     lastPage: lastPageRef.current,
     tourStepIds: tourSteps.map((s) => s.id),
   };
 
+  const closeMenu = () => setMenuOpen(false);
+  const sidebarProps = {
+    pendingReviews,
+    onNavigate: closeMenu,
+    onReplayTour: () => {
+      closeMenu();
+      startTour();
+    },
+    onLogout: handleLogout,
+  };
+
   return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b border-border/50 bg-secondary/50 print:hidden">
-        <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
-          <h1 className="text-xl font-bold font-serif text-primary">
+    <div className="min-h-screen bg-background" data-marker="MCA_R7_ADMIN_NAV">
+      {/* Desktop: fixed left sidebar. */}
+      <aside
+        className="hidden md:flex fixed inset-y-0 left-0 z-30 w-60 flex-col border-r border-border/50 bg-secondary/50 print:hidden"
+        data-tour="admin-sidebar"
+      >
+        <div className="px-6 pt-5 pb-1">
+          <NavLink to={ADMIN_ROUTE} className="text-xl font-bold font-serif text-primary">
             MCA Admin
-          </h1>
-          <nav className="flex items-center gap-2 flex-wrap">
-            <NavLink to={`${ADMIN_ROUTE}/enrollments`} className={navLinkClass}>
-              Current Enrollments
-            </NavLink>
-            <NavLink to={`${ADMIN_ROUTE}/orders`} className={navLinkClass}>
-              Store Orders
-            </NavLink>
-            <NavLink to={`${ADMIN_ROUTE}/plans`} className={navLinkClass}>
-              Subscription Plans
-            </NavLink>
-            <NavLink to={`${ADMIN_ROUTE}/inventory`} className={navLinkClass}>
-              Inventory Pricing
-            </NavLink>
-            <NavLink to={`${ADMIN_ROUTE}/users`} className={navLinkClass}>
-              Admin Users
-            </NavLink>
-            <NavLink to={`${ADMIN_ROUTE}/settings`} className={navLinkClass}>
-              Payment Mode (Test/Live)
-            </NavLink>
-            <NavLink to={`${ADMIN_ROUTE}/families`} className={navLinkClass}>
-              Families
-            </NavLink>
-            <NavLink to={`${ADMIN_ROUTE}/pick-lists`} className={navLinkClass}>
-              Pick Lists
-            </NavLink>
-            <NavLink to={`${ADMIN_ROUTE}/backorders`} className={navLinkClass}>
-              Backordered
-            </NavLink>
-            <NavLink to={`${ADMIN_ROUTE}/test-reviews`} className={navLinkClass}>
-              Test Reviews{pendingReviews > 0 ? ` (${pendingReviews})` : ""}
-            </NavLink>
-            <NavLink to={`${ADMIN_ROUTE}/emails`} className={navLinkClass}>
-              Email Templates
-            </NavLink>
-            <NavLink to={`${ADMIN_ROUTE}/enroll-comp`} className={navLinkClass}>
-              Enroll Without Payment
-            </NavLink>
-            <NavLink to={`${ADMIN_ROUTE}/help`} className={navLinkClass} data-tour="admin-nav-help">
-              Help
-            </NavLink>
-            <button
-              type="button"
-              onClick={() => startTour()}
-              className="px-4 py-2 rounded-lg text-sm font-medium text-foreground/70 hover:bg-secondary transition-colors"
-              data-marker="MCA_R6_ADMIN_TOUR_LINK"
-              data-tour="admin-tour-button"
-              title="Replay the admin tour"
-            >
-              Tour
-            </button>
-            <button
-              onClick={handleLogout}
-              className="ml-2 px-4 py-2 rounded-lg text-sm font-medium text-foreground/70 hover:bg-secondary transition-colors"
-            >
-              Log Out
-            </button>
-          </nav>
+          </NavLink>
         </div>
+        <AdminSidebarNav {...sidebarProps} />
+      </aside>
+
+      {/* Phone: top bar with a menu button that opens the sidebar as a drawer. */}
+      <header className="md:hidden sticky top-0 z-30 flex items-center gap-3 border-b border-border/50 bg-secondary px-4 py-3 print:hidden">
+        <button
+          type="button"
+          onClick={() => setMenuOpen(true)}
+          className="rounded-lg p-2 text-foreground/80 hover:bg-background"
+          aria-label="Open menu"
+          aria-expanded={menuOpen}
+          data-tour="admin-menu-button"
+        >
+          <Menu className="h-5 w-5" />
+        </button>
+        <NavLink to={ADMIN_ROUTE} className="text-lg font-bold font-serif text-primary">
+          MCA Admin
+        </NavLink>
+        {pendingReviews > 0 && (
+          <NavLink
+            to={`${ADMIN_ROUTE}/test-reviews`}
+            className="ml-auto rounded-full bg-primary px-2.5 py-0.5 text-xs font-semibold text-primary-foreground"
+          >
+            {pendingReviews} to review
+          </NavLink>
+        )}
       </header>
+      {menuOpen && (
+        <div className="md:hidden fixed inset-0 z-50 print:hidden" role="dialog" aria-modal="true" aria-label="Admin menu">
+          <div className="absolute inset-0 bg-black/40" onClick={closeMenu} aria-hidden="true" />
+          <aside
+            className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col bg-background shadow-xl"
+            data-tour="admin-sidebar"
+          >
+            <div className="flex items-center justify-between px-6 pt-4">
+              <span className="text-xl font-bold font-serif text-primary">MCA Admin</span>
+              <button
+                type="button"
+                onClick={closeMenu}
+                className="rounded-lg p-2 text-foreground/70 hover:bg-secondary"
+                aria-label="Close menu"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <AdminSidebarNav {...sidebarProps} />
+          </aside>
+        </div>
+      )}
+
       <SpotlightTour
         name="admin"
         open={tourOpen}
         onClose={closeTour}
         steps={tourSteps}
         startAt={tourStart}
+        onStepChange={(step) => setMenuOpen(isPhoneWidth() && ADMIN_MENU_TOUR_STEPS.has(step.id))}
       />
-      <main className="max-w-6xl mx-auto px-4 py-10">
-        <Outlet context={outletContext} />
-      </main>
+      <div className="md:pl-60">
+        <main className="max-w-6xl mx-auto px-4 py-6 md:px-8 md:py-10">
+          <Outlet context={outletContext} />
+        </main>
+      </div>
     </div>
   );
 };
